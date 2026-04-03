@@ -85,7 +85,8 @@ function getDefaults() {
     council: {
       angles: ['security', 'architecture', 'product'],
       auto_approve_threshold: 0,
-      model: 'claude-sonnet-4-6'
+      default_model: 'claude-sonnet-4-6',
+      model_overrides: {}
     },
     commands: {
       install: 'npm install',

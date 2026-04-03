@@ -11,6 +11,8 @@ export async function runCouncil(featureDescription, options = {}) {
   const {
     angles = ['security', 'architecture', 'product'],
     model = 'claude-sonnet-4-6',
+    defaultModel = model,
+    modelOverrides = {},
     councilDir = '.harness/council',
     context = ''
   } = options;
@@ -42,11 +44,12 @@ export async function runCouncil(featureDescription, options = {}) {
   // Phase 1: Run all council members in parallel
   console.log(chalk.cyan('\n  Council convening...'));
   const reviewPromises = personas.map(async (persona) => {
+    const angleModel = modelOverrides[persona.angle] || defaultModel;
     const start = Date.now();
-    process.stdout.write(chalk.dim(`    ${persona.angle}: thinking...`));
+    process.stdout.write(chalk.dim(`    ${persona.angle}: thinking... [${angleModel}]`));
 
     const response = await client.messages.create({
-      model,
+      model: angleModel,
       max_tokens: 2000,
       system: persona.systemPrompt,
       messages: [{ role: 'user', content: userMessage }]
@@ -57,9 +60,9 @@ export async function runCouncil(featureDescription, options = {}) {
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
 
     // Clear line and rewrite
-    process.stdout.write(`\r    ${persona.angle}: ${scoreColor(score)}${score}/10${chalk.reset} (${elapsed}s)\n`);
+    process.stdout.write(`\r    ${persona.angle}: ${scoreColor(score)}${score}/10${chalk.reset} (${elapsed}s) [${angleModel}]\n`);
 
-    return { angle: persona.angle, score, response: text };
+    return { angle: persona.angle, score, response: text, model: angleModel };
   });
 
   const reviews = await Promise.all(reviewPromises);
@@ -69,7 +72,7 @@ export async function runCouncil(featureDescription, options = {}) {
   const resolverInput = buildResolverInput(featureDescription, reviews, context);
 
   const resolverResponse = await client.messages.create({
-    model,
+    model: defaultModel,
     max_tokens: 4000,
     system: resolverPrompt,
     messages: [{ role: 'user', content: resolverInput }]

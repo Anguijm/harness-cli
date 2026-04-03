@@ -20,11 +20,15 @@ export async function plan(description, options) {
   // Run council
   const councilDir = path.join(cwd, '.harness', 'council');
   const angles = options.council || config.council?.angles || ['security', 'architecture', 'product'];
-  const model = options.model || config.council?.model || 'claude-sonnet-4-6';
+  // Backward compatible: support old `model` key and new `default_model` key
+  const defaultModel = options.model || config.council?.default_model || config.council?.model || 'claude-sonnet-4-6';
+  const modelOverrides = config.council?.model_overrides || {};
 
   const result = await runCouncil(description, {
     angles,
-    model,
+    model: defaultModel,
+    defaultModel,
+    modelOverrides,
     councilDir,
     context
   });

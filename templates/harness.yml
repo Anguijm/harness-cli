@@ -19,8 +19,13 @@ council:
     - product
   # Minimum consensus score to auto-approve (1-10, 0 = always ask human)
   auto_approve_threshold: 0
-  # LLM to use for council calls
-  model: claude-sonnet-4-6
+  # Default LLM for council calls (used when no per-angle override exists)
+  default_model: claude-sonnet-4-6
+  # Per-angle model overrides (optional — omit to use default_model for all)
+  model_overrides:
+    security: claude-sonnet-4-6
+    architecture: claude-sonnet-4-6
+    product: claude-sonnet-4-6
 
 # Build commands (harness runs these to verify)
 commands:
