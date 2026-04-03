@@ -157,5 +157,7 @@ Add to your Claude Code config to run the council automatically:
 
 - **v0.1** (current): Plan command with council + resolver + handoff
 - **v0.2**: Review command (council on existing code), status command, tick-tock cadence
-- **v0.3**: Claude Code hooks adapter, GitHub Actions integration
+- **v0.2**: Domain-split handoff (numbered files: `01-db-schema.txt`, `02-backend-api.txt`, `03-frontend-ui.txt`), review command, status command, tick-tock cadence
+- **v0.3**: Claude Code hooks adapter, GitHub Actions auto-audit
 - **v0.4**: Phase 4 experiment pipeline (YouTube RSS → backlog)
+- **v2.0**: Multi-agent orchestration (Paperclip-style parallel coding agents with worktree isolation)
