@@ -4,6 +4,7 @@ import { init } from './commands/init.js';
 import { plan } from './commands/plan.js';
 import { review } from './commands/review.js';
 import { recipe } from './commands/recipe.js';
+import { learn } from './commands/learn.js';
 import chalk from 'chalk';
 
 const program = new Command();
@@ -43,6 +44,12 @@ program
   .option('-o, --output <file>', 'Output plan file', '.harness/plan.md')
   .option('--no-interactive', 'Skip circuit breaker (for cron/CI)')
   .action(recipe);
+
+program
+  .command('learn')
+  .description('Generate reusable recipes from completed plans')
+  .option('--from-session', 'Learn from the most recent plan + aider-instructions')
+  .action(learn);
 
 program
   .command('status')
