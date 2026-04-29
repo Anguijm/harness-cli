@@ -53,6 +53,7 @@ function expectFile(dir, rel) {
     expectFile(dir, '.github/workflows/ci.yml');
     expectFile(dir, '.github/workflows/council.yml');
     expectFile(dir, '.github/workflows/branch-guard.yml');
+    expectFile(dir, '.github/workflows/drift-check.yml');
     expectFile(dir, '.husky/pre-push');
     expectFile(dir, 'scripts/setup-secrets.sh');
     // Stack-specific: node-ts gets husky, no python ci file.
@@ -123,6 +124,33 @@ function expectFile(dir, rel) {
     const checkOut = run(`node "${CLI}" check`, dir);
     assert(checkOut.includes('missing  0'), 'expected zero missing after --update');
     console.log('PASS: init --update adds missing files');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 5: harness map produces a Repository Impact block from a description.
+// Uses --untracked git grep so we don't need a commit (avoids depending on
+// the test environment's signing config).
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    fs.writeFileSync(
+      path.join(dir, 'webhooks.ts'),
+      'export class StripeWebhookHandler { handleEvent() {} }\n'
+    );
+    fs.writeFileSync(
+      path.join(dir, 'webhooks.test.ts'),
+      'import { StripeWebhookHandler } from "./webhooks"\n'
+    );
+
+    const out = run(
+      `node "${CLI}" map "Add error handling to StripeWebhookHandler"`,
+      dir
+    );
+    assert(out.includes('Repository Impact'), 'expected impact heading');
+    assert(out.includes('webhooks.ts'), 'expected webhooks.ts in impact');
+    console.log('PASS: harness map identifies real files');
   } finally {
     cleanup(dir);
   }

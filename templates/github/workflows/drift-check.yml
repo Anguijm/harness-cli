@@ -1,0 +1,80 @@
+name: Harness Drift Check
+
+# Weekly read-only verification that this repo's harness layout matches the
+# canonical topology emitted by harness-cli. Catches when a workflow file or
+# persona has been edited without a corresponding template update — or when
+# the template has moved forward and this repo hasn't.
+#
+# On drift: opens (or updates) a single tracking issue with the report.
+# Manual run: workflow_dispatch.
+
+on:
+  schedule:
+    # Mondays at 14:00 UTC.
+    - cron: '0 14 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Checkout harness-cli (canonical topology source)
+        uses: actions/checkout@v4
+        with:
+          repository: Anguijm/harness-cli
+          ref: main
+          path: .harness-cli-canonical
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install harness-cli deps
+        working-directory: .harness-cli-canonical
+        run: npm ci
+
+      - name: Run drift check
+        id: check
+        run: |
+          set +e
+          node .harness-cli-canonical/src/cli.js check --verbose > drift.txt 2>&1
+          STATUS=$?
+          set -e
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          cat drift.txt
+          if [ "$STATUS" -ne 0 ]; then
+            {
+              echo "## Harness drift detected"
+              echo
+              echo '```'
+              cat drift.txt
+              echo '```'
+              echo
+              echo "Run \`harness init --update\` from a checkout of [Anguijm/harness-cli](https://github.com/Anguijm/harness-cli) to add missing files. For modified files, review manually — they may be repo-specific customizations or genuine drift."
+            } > issue-body.md
+          fi
+
+      - name: Open or update tracking issue
+        if: steps.check.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TITLE="Harness drift: $(date -u +%Y-%m-%d)"
+          EXISTING=$(gh issue list --repo "$REPO" --label "harness-drift" --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --repo "$REPO" --body-file issue-body.md
+            echo "Commented on existing drift issue #$EXISTING."
+          else
+            gh label create harness-drift --repo "$REPO" --color "ededed" --description "Drift between repo and canonical harness topology" 2>/dev/null || true
+            gh issue create --repo "$REPO" --title "$TITLE" --label "harness-drift" --body-file issue-body.md
+          fi

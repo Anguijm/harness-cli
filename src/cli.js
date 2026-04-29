@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import { init } from './commands/init.js';
 import { check } from './commands/check.js';
+import { map } from './commands/map.js';
 import { plan } from './commands/plan.js';
 import { review } from './commands/review.js';
 import { recipe } from './commands/recipe.js';
@@ -30,6 +31,14 @@ program
   .option('-s, --stack <stack>', 'Project stack (node-ts, python, auto)', 'auto')
   .option('-v, --verbose', 'List modified files in addition to missing ones')
   .action(check);
+
+program
+  .command('map <description>')
+  .description('Repository Impact Map — ground a plan in the actual codebase before writing it')
+  .option('-w, --write', 'Prepend the impact block to .harness/active_plan.md (replaces any prior block)')
+  .option('-l, --limit <n>', 'Max files to list (default 30)', (v) => parseInt(v, 10), 30)
+  .option('-v, --verbose', 'Print candidate terms to stderr')
+  .action(map);
 
 program
   .command('plan <description>')
