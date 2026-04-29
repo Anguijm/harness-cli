@@ -15,6 +15,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -22,7 +23,7 @@ export const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
 // Placeholder context for substitution.
 export function buildContext({ cwd, stack }) {
-  const projectName = path.basename(cwd);
+  const projectName = detectProjectName(cwd);
   const ctx = { PROJECT_NAME: projectName, STACK: stack };
   if (stack === 'node-ts') {
     ctx.LANGUAGE = 'typescript';
@@ -44,6 +45,26 @@ export function buildContext({ cwd, stack }) {
     ctx.TEST_CMD = '';
   }
   return ctx;
+}
+
+// Prefer the git remote name (more accurate for templated clones where the
+// local dir may not match the repo name). Fall back to the directory
+// basename when there's no remote.
+export function detectProjectName(cwd) {
+  try {
+    const remote = execSync('git remote get-url origin 2>/dev/null', {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (remote) {
+      const name = path.basename(remote, '.git');
+      if (name) return name;
+    }
+  } catch {
+    // No remote, no git, or git error — fall back.
+  }
+  return path.basename(cwd);
 }
 
 export function detectStack(cwd) {
