@@ -1,6 +1,6 @@
 {
   "name": "harness-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AI development harness — plan, council, build methodology as a CLI",
   "type": "module",
   "bin": {
@@ -8,9 +8,17 @@
   },
   "scripts": {
     "start": "node src/cli.js",
-    "test": "node src/cli.js --help"
+    "test": "node test/init.test.mjs",
+    "lint": "node -e \"console.log('no linter configured yet')\"",
+    "typecheck": "node -e \"console.log('no typechecker configured yet')\""
   },
-  "keywords": ["ai", "development", "council", "planning", "methodology"],
+  "keywords": [
+    "ai",
+    "development",
+    "council",
+    "planning",
+    "methodology"
+  ],
   "author": "John Anguiano",
   "license": "MIT",
   "dependencies": {

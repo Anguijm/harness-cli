@@ -1,163 +1,103 @@
 # harness-cli
 
-AI development harness — your engineering manager in a CLI. Plans features, runs them through an expert council, resolves conflicts, and hands a bulletproof spec to your coding tool.
-
-## What It Does
-
-You describe a feature. Three AI experts argue about it. A lead architect resolves their conflicts. You approve the plan. Then your coding tool (Aider, Claude Code, Cursor) executes it.
-
-```
-harness plan "Add Stripe webhook handling for payment events"
-
-  Council convening...
-    security:       8/10 (3.2s)
-    architecture:   7/10 (2.8s)
-    product:        9/10 (2.1s)
-
-  Lead Architect resolving...
-  Plan generated.
-
-  Council Scores:
-    security        8/10
-    architecture    7/10
-    product         9/10
-    average         8.0/10
-
-  Accept plan? [Y/n/edit] Y
-
-  Plan approved. Handoff ready.
-
-  To execute with Aider:
-  aider --message-file .harness/aider-instructions.txt
-
-  To execute with Claude Code:
-  claude "Read .harness/plan.md and implement it exactly."
-```
-
-## Install
+Bootstrap a complete AI-assisted development harness — Gemini council, Claude Code settings, hooks, CI/CD, secret scanning, and session-state tracking — into any repo with a single command.
 
 ```bash
-npm install -g harness-cli
+harness init     # full canonical install
+harness check    # drift report — what's missing or modified
+harness init --update    # add anything missing without touching customizations
 ```
 
-Requires `ANTHROPIC_API_KEY` environment variable.
+## What it sets up
 
-## Quick Start
+Running `harness init` writes the canonical layout into the current repo:
+
+- **`.claude/`** — Claude Code settings, permission allowlist, SessionStart + git-push-safety hooks, and the `close-session` skill.
+- **`.harness/`** — multi-persona Gemini council (architecture, security, bugs, cost, product, accessibility, maintainability + lead-architect resolver), runner script, post-commit hook, learnings log, halt instructions, model-upgrade checklist.
+- **`.github/workflows/`** — CI (lint + typecheck + test + gitleaks), council review on every PR (with monthly budget cap and serialized pre-flight to prevent races), and post-hoc branch guard.
+- **`.husky/pre-push`** (Node/TS only) — local lint + typecheck before any push.
+- **`.gitleaks.toml`** — secret scanning, runs before any LLM call.
+- **`scripts/setup-secrets.sh`** — one-time per-machine sync of API keys to a new repo (no per-project Gemini key wrangling).
+- **`CLAUDE.md`**, **`harness.yml`** — operating doctrine + config.
+
+Stack auto-detected from `package.json` / `requirements.txt`; CI workflow and hooks adjust accordingly.
+
+## Quick start
 
 ```bash
 cd my-project
-harness init                                    # creates harness.yml + .harness/
-harness plan "add user auth with JWT"           # council debates, generates plan
-aider --message-file .harness/aider-instructions.txt  # execute the plan
+npx harness-cli init
+bash .harness/scripts/install_hooks.sh          # wire the post-commit hook
+bash scripts/setup-secrets.sh                    # sync GEMINI_API_KEY etc. to repo
 ```
+
+Then specialize the personas — the generic skeletons in `.harness/council/*.md` produce generic critiques. Edit each persona's `## Scope` section to match this repo's actual modules and contracts.
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `harness init` | Initialize harness in current project |
-| `harness plan "feature"` | Run council, generate plan, create handoff |
-| `harness review` | Run council on existing code (v0.2) |
-| `harness status` | Show session history and memory (v0.2) |
+| Command | What it does |
+|---|---|
+| `harness init` | Fresh install. Errors if `.harness/` exists. |
+| `harness init --update` | Add missing files; preserve existing ones. Safe to re-run. |
+| `harness init --force` | Overwrite everything (destructive). |
+| `harness check` | Read-only drift report. Exits 1 if anything's missing. |
+| `harness plan "feature"` | (legacy) Anthropic-powered planning. v0.1 path. |
 
-## How It Works
+## How the council works
 
-### The Council
+On every PR, `.github/workflows/council.yml`:
+1. Runs gitleaks against the diff (fails before any LLM sees secrets).
+2. Checks the monthly Gemini-call budget (serialized across all PRs in the repo).
+3. Dispatches every persona in `.harness/council/*.md` against the diff in parallel.
+4. Synthesizes via the Lead Architect persona.
+5. Posts a single re-editable PR comment with verdict 🟢 CLEAR / 🟡 CONDITIONAL / 🔴 BLOCK.
 
-Three expert personas review your feature request in parallel:
+Local invocation: `python3 .harness/scripts/council.py --plan .harness/active_plan.md` or `--diff --base origin/main`.
 
-- **Security** — vulnerabilities, auth flaws, injection risks, data exposure
-- **Architecture** — data model, API design, component boundaries, scalability
-- **Product** — user impact, UX issues, scope, accessibility, mobile
+Skip directives: `[skip council]` in PR title bypasses for that PR. `.harness_halt` at repo root halts everything until removed.
 
-### The Resolver
+## Customization
 
-A Lead Architect reads all three critiques, resolves contradictions, and writes a single coherent plan with:
-- Architecture decisions
-- Implementation steps (ordered, testable)
-- Security requirements (non-negotiable)
-- Edge cases
-- Out-of-scope items
-
-### The Circuit Breaker
-
-The CLI pauses and shows you the plan. You approve, reject, or edit before any code is written. No autonomous coding without human sign-off.
-
-### The Handoff
-
-Generates `.harness/aider-instructions.txt` — a complete implementation spec that any coding tool can execute. Also saves to `.harness/plan.md` for reference.
-
-## Configuration (harness.yml)
-
-```yaml
-name: my-project
-stack: node
-framework: express
-language: typescript
-
-council:
-  angles:
-    - security
-    - architecture
-    - product
-  model: claude-sonnet-4-6
-
-commands:
-  test: npm test
-  build: npm run build
-```
-
-## Custom Council Angles
-
-Add custom expert personas by dropping markdown files in `.harness/council/`:
-
-```bash
-# .harness/council/accessibility.md
-You are an Accessibility Expert reviewing a development plan...
-```
-
-Then run with: `harness plan "feature" --council security architecture accessibility`
-
-## Memory
-
-The harness remembers past decisions in `.harness/memory/`. Each plan session is logged with council scores, timestamps, and the feature description. This context is injected into future council sessions so experts build on past architectural choices.
-
-## Use as Claude Code Hook
-
-Add to your Claude Code config to run the council automatically:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [{
-      "matcher": "Edit|Write",
-      "command": "harness plan \"$DESCRIPTION\" --no-interactive > /dev/null"
-    }]
-  }
-}
-```
-
-## Use in CI/CD
-
-```yaml
-# .github/workflows/harness.yml
-- run: harness plan "${{ github.event.issue.title }}" --no-interactive
-- run: aider --message-file .harness/aider-instructions.txt --yes
-```
+- **Personas**: edit `.harness/council/<angle>.md`. New personas auto-discovered. Disable by renaming to `.md.disabled`.
+- **Diff exclusions**: `HARNESS_DIFF_EXCLUDES` env var (comma-separated pathspec) or edit `_DEFAULT_DIFF_EXCLUDES` in `council.py`.
+- **Monthly budget**: `MONTHLY_CAP` in `.github/workflows/council.yml`.
+- **Per-run cap**: `CALL_CAP` in `council.py` (default 15, includes retries).
 
 ## Philosophy
 
-- **Think before you type.** The harness does the reasoning. Your coding tool does the typing.
-- **Multiple perspectives.** One reviewer misses things. Three experts catch what each other misses.
-- **Human in the loop.** No autonomous coding without approval. The circuit breaker is sacred.
-- **Tool agnostic.** Works with Aider, Claude Code, Cursor, or any tool that reads text.
-- **Methodology as code.** The council personas, the pipeline, the memory — all version-controlled in your repo.
+- **Plan before code.** The harness reviews intent, not just output.
+- **Multiple perspectives.** Seven personas catch what one misses.
+- **Human in the loop.** No verdict auto-merges. Circuit breaker is sacred.
+- **Compounds across sessions.** `learnings.md` accumulates institutional knowledge so future Claude sessions don't relearn the same lessons.
+- **Cost-disciplined.** Hard per-run cap, monthly budget, gitleaks pre-flight.
+
+## Repo layout (after `harness init`)
+
+```
+your-repo/
+├── .claude/
+│   ├── settings.json
+│   ├── hooks/
+│   └── skills/close-session.md
+├── .harness/
+│   ├── council/                # personas — edit per repo
+│   ├── scripts/council.py      # the runner
+│   ├── hooks/post-commit
+│   ├── active_plan.md
+│   └── learnings.md
+├── .github/workflows/
+│   ├── ci.yml
+│   ├── council.yml
+│   └── branch-guard.yml
+├── .husky/pre-push
+├── .gitleaks.toml
+├── scripts/setup-secrets.sh
+├── CLAUDE.md
+└── harness.yml
+```
 
 ## Roadmap
 
-- **v0.1** (current): Plan command with council + resolver + handoff
-- **v0.2**: Review command (council on existing code), status command, tick-tock cadence
-- **v0.2**: Domain-split handoff (numbered files: `01-db-schema.txt`, `02-backend-api.txt`, `03-frontend-ui.txt`), review command, status command, tick-tock cadence
-- **v0.3**: Claude Code hooks adapter, GitHub Actions auto-audit
-- **v0.4**: Phase 4 experiment pipeline (YouTube RSS → backlog)
-- **v2.0**: Multi-agent orchestration (Paperclip-style parallel coding agents with worktree isolation)
+- **v0.2** (current): canonical template + init/check/update; settings hooks; budget race fix; close-session skill; auto-PR-watching rule
+- **v0.3**: per-stack lint/test scaffolding; pre-commit hook framework alongside husky; specialized persona generators
+- **v0.4**: optional template-repo mode (`gh repo create --template`) so init isn't needed for new projects
