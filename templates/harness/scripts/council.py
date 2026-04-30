@@ -441,7 +441,10 @@ def call_gemini(
                 f"before attempt {attempt + 1})"
             )
         try:
-            resp = client.generate_content(prompt)
+            resp = client.models.generate_content(
+                model=model,
+                contents=prompt,
+            )
             return (resp.text or "").strip() or "(empty response)"
         except Exception as e:  # noqa: BLE001
             last_err = e
@@ -515,10 +518,10 @@ def main() -> int:
         )
 
     try:
-        import google.generativeai as genai
+        from google import genai
     except ImportError:
         die(
-            "google-generativeai not installed.\n"
+            "google-genai not installed.\n"
             "Run: pip install -r .harness/scripts/requirements.txt",
             code=4,
         )
@@ -534,8 +537,7 @@ def main() -> int:
             code=5,
         )
 
-    genai.configure(api_key=api_key)
-    model_client = genai.GenerativeModel(args.model)
+    client = genai.Client(api_key=api_key)
 
     checklist = load_security_checklist()
     budget = RequestBudget(CALL_CAP)
@@ -567,7 +569,7 @@ def main() -> int:
                 else ""
             )
             prompt = build_prompt(body, source_label, source_text, extra=extra, prior_context=prior_context)
-            futures[pool.submit(call_gemini, model_client, args.model, prompt, budget)] = name
+            futures[pool.submit(call_gemini, client, args.model, prompt, budget)] = name
         for fut in as_completed(futures):
             name = futures[fut]
             critiques[name] = fut.result()
@@ -589,7 +591,7 @@ def main() -> int:
     if prior_context:
         synthesis_payload = f"{prior_context}\n\n---\n\n" + synthesis_payload
     lead_prompt = build_prompt(lead_body, source_label, synthesis_payload)
-    synthesis = call_gemini(model_client, args.model, lead_prompt, budget)
+    synthesis = call_gemini(client, args.model, lead_prompt, budget)
     used, cap = budget.snapshot()
     print(f"[council] Requests consumed: {used}/{cap}")
 
