@@ -41,8 +41,10 @@ const VALID_FAILURE_CLASSES = new Set([
 ]);
 
 // Path-shaped tokens to look up. Avoids matching every common word — must
-// have a slash or a recognized extension.
-const PATH_RE = /\b((?:src|configs?|scripts|tests?|\.harness|\.claude|\.github|\.husky|data|docs|public|app|lib|components)\/[\w./-]+|[\w./-]+\.(?:tsx?|jsx?|py|md|ya?ml|json|toml|sh))\b/g;
+// have a slash or a recognized extension. Uses lookbehind/lookahead instead
+// of \b so leading dots (.github, .harness, etc.) are captured correctly —
+// \b sits between the dot and `g` and cuts the dot out of the match.
+const PATH_RE = /(?<![\w./-])((?:\.harness|\.claude|\.github|\.husky|src|configs?|scripts|tests?|data|docs|public|app|lib|components)\/[\w./-]+|[\w./-]+\.(?:tsx?|jsx?|py|md|ya?ml|json|toml|sh))(?![\w/-])/g;
 
 const SHA_RE = /\b([0-9a-f]{7,40})\b/g; // git short-sha or full
 
