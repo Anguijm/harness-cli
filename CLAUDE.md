@@ -132,6 +132,13 @@ git checkout -b <new-branch> origin/main
 
 If automation is producing bad output: `echo "reason" > .harness_halt` at repo root. The council and any cron workflows will silent-exit. See `.harness/halt_instructions.md`.
 
+## Hook timeouts (settings.json)
+
+`.claude/settings.json` configures two hook timeouts. JSON syntax doesn't allow inline comments, so the rationale lives here:
+
+- **`SessionStart` hook timeout: 10s.** Runs `.claude/hooks/session-start.sh`, which prints last-commit / halt-status / active-plan / last-council-verdict. Typical run < 2s. **Failure mode if exceeded: hook is killed and Claude proceeds without the session-start context** — risk is missing the halt warning or plan reminder. If you find it timing out regularly, the hook script needs optimization, not a longer timeout.
+- **`PreToolUse` (Bash) hook timeout: 15s.** Runs `.claude/hooks/check-branch-not-merged.sh` before any Bash tool call. The check involves `git fetch origin main`, which can be slow on poor networks. **Failure mode if exceeded: hook fails open and the push is allowed** — by design (we'd rather let a push through than block all git activity on a flaky network). If you need stricter behavior, swap to fail-closed in the hook itself.
+
 ## What lives where
 
 <!-- Specialize this section for the repo. Examples:

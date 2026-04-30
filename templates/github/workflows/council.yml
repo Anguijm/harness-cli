@@ -100,6 +100,11 @@ jobs:
       - name: Decide and reserve
         id: decide
         env:
+          # Monthly cap on Gemini API calls across the whole repo. Sized for
+          # ~20 PRs/month × ~3 council runs/PR = 60 calls. Raise if project
+          # velocity increases; lower if cost ceiling is the binding constraint.
+          # Hard-enforced by the pre-flight check above (per-run cap is in
+          # .harness/scripts/council.py:CALL_CAP).
           MONTHLY_CAP: 60
           SKIPPED: ${{ steps.skip.outputs.skip }}
           HALTED: ${{ steps.halt.outputs.halted }}
