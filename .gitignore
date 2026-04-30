@@ -1,3 +1,11 @@
 node_modules/
+__pycache__/
 .harness/logs/
+.harness/last_council.md
+.harness/session_state.json
+.harness/yolo_log.jsonl
+.budget/
 *.log
+*.pyc
+.env
+.env.local

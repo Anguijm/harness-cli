@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# pre-push: run lint + typecheck before any push reaches the remote.
+# Tests are NOT in pre-push (too slow); they run in CI.
+#
+# Skip with: git push --no-verify (use sparingly; CI will catch what slips).
+
+set -e
+
+if [ -f package.json ]; then
+  if grep -q '"lint"' package.json; then
+    echo "[husky] lint..."
+    npm run lint
+  fi
+  if grep -q '"typecheck"' package.json; then
+    echo "[husky] typecheck..."
+    npm run typecheck
+  fi
+fi
+
+echo "[husky] pre-push OK"
