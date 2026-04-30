@@ -15,7 +15,7 @@ council:
   monthly_cap: 60
   # Hard-enforced by CALL_CAP in .harness/scripts/council.py — change the
   # value there (this is a documentation mirror only).
-  per_run_cap: 15
+  per_run_cap: 20
 
 # Build commands — used by harness recipes and CI workflow templates.
 commands:
