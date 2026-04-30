@@ -42,17 +42,42 @@ For any non-trivial change:
 - "Commit and push" ≠ "open a PR". Push to the remote and stop.
 - If a PR already exists for the branch, don't open a duplicate.
 
-## Watch PRs automatically
+## Council watching is automatic — never ask
 
-**As soon as a PR is opened (by you or by the user), call `mcp__github__subscribe_pr_activity` to listen for PR events.** Don't wait to be asked. The council takes ~3 minutes to post its verdict; codex review comments arrive on a similar timeline; CI failures arrive as soon as a check completes. Subscribing is the right way to react in time without polling.
+**As soon as a PR is opened (by you or by the user), call `mcp__github__subscribe_pr_activity` to listen for PR events.** Don't wait to be asked.
 
-When events arrive:
-- **Council comment (`<!-- council-report -->`)** — read the verdict. CLEAR = nothing to do. CONDITIONAL = address remediations as follow-up commits. BLOCK = pause and discuss with the user before proceeding.
-- **Codex review comments** — sometimes GitHub adds Codex review comments alongside the council. Treat them as another sensor; respond if the comment is actionable, or explain in a reply if it's not.
-- **CI failures** — read the log, fix or surface the issue. Don't ignore.
+**Don't ask the user "should I check the council?" — just check it.** When a webhook event arrives, when a PR push happens, when more than a few minutes have passed on an open PR with no update — pull current state (`pull_request_read get_check_runs` + `get_comments`) and report what's new. The user shouldn't have to type "check council" to get a status update. Treat council/CI/codex polling as the harness doing its job, not a thing the user requests.
+
+The council takes ~3 minutes to post its verdict; codex review comments arrive on a similar timeline; CI failures arrive as soon as a check completes.
+
+When events arrive, evaluate and act:
+- **Council 🟢 CLEAR** — note it briefly, move on.
+- **Council 🟡 CONDITIONAL / WARN** — if the remediations are small, mechanical, and you're confident they're correct, **fix them inline without asking**. Ask only when remediations are architecturally significant, ambiguous, or trade off scope.
+- **Council 🔴 BLOCK / FAIL** — pause, summarize the verdict, and ask.
+- **Codex review comments** — treat as another sensor. If the suggestion is small + correct, fix inline. If wrong (Codex sometimes is), document the dispute in a reply and skip.
+- **CI failures** — read the log, fix or surface the issue. Don't ignore. If the cause is obvious (lockfile drift, missing file, wrong script name), fix without asking.
 - **User comments** — defer to user direction.
 
 If the user closes the session before events arrive, that's fine — the next session can re-subscribe.
+
+## Default to the longevity-best option without asking
+
+When presented with multiple solutions or paths, **don't enumerate them and ask which to take**. Pick the option with the best long-term outcomes for the project, do it, and explain post-hoc what you chose and why.
+
+**Criteria for "longevity-best" (in priority order):**
+1. **Standardization over local optimization** — canonical patterns over bespoke ones, even when bespoke is slightly nicer.
+2. **Maintainability over cleverness** — simple, explicit code that a future human or Claude can read cold, over implicit/clever code that compresses better.
+3. **Preserves the audit trail** — PRs + council + branch-guard over direct pushes; documented disputes over silent decisions; structured failures.jsonl over ad-hoc learnings.md prose.
+4. **Minimizes future drift** — one source of truth; backport upstream when applicable; pin versions; no copies-of-copies.
+5. **Makes the right thing the easy thing** — defaults that prevent the next mistake. Hooks that catch the next bug. Personas that name the next anti-pattern.
+
+**Still ask before:**
+- Hard-to-reverse actions (force-push, delete branches, drop tables, rewrite history).
+- Actions visible to external systems (PR creation, public comments, merges to main when not previously authorized for this scope).
+- Cost-significant decisions (raising MONTHLY_CAP, adding a new persona, scheduling new cron jobs).
+- Decisions where you can't articulate a clear longevity case post-hoc.
+
+When you do choose autonomously, write the rationale into the commit message or PR description so the choice is auditable.
 
 ## Steering loop discipline
 
