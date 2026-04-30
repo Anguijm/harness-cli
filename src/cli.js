@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { init } from './commands/init.js';
 import { check } from './commands/check.js';
 import { map } from './commands/map.js';
+import { recall } from './commands/recall.js';
 import { plan } from './commands/plan.js';
 import { review } from './commands/review.js';
 import { recipe } from './commands/recipe.js';
@@ -39,6 +40,13 @@ program
   .option('-l, --limit <n>', 'Max files to list (default 30)', (v) => parseInt(v, 10), 30)
   .option('-v, --verbose', 'Print candidate terms to stderr')
   .action(map);
+
+program
+  .command('recall <query>')
+  .description('Surface past entries from .harness/ memory (learnings, failures, council reports) ranked by keyword density × recency')
+  .option('-l, --limit <n>', 'Max results (default 5)', (v) => parseInt(v, 10), 5)
+  .option('-s, --source <path...>', 'Override default sources (repeatable)')
+  .action(recall);
 
 program
   .command('plan <description>')

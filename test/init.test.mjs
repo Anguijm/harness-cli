@@ -129,6 +129,35 @@ function expectFile(dir, rel) {
   }
 }
 
+// Test 6: harness recall finds keyword matches in learnings.md and ranks them.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    fs.mkdirSync(path.join(dir, '.harness'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      [
+        '# Learnings',
+        '',
+        '## 2026-04-29 — early lesson',
+        '### KEEP',
+        '- pre-flight budget races are real',
+        '',
+        '## 2026-04-30 — recent lesson',
+        '### INSIGHT',
+        '- council drift means the persona scope is wrong',
+        '',
+      ].join('\n')
+    );
+    const out = run(`node "${CLI}" recall "council drift"`, dir);
+    assert(out.includes('Recall:'), 'expected recall heading');
+    assert(out.includes('persona scope is wrong'), 'expected matching excerpt');
+    console.log('PASS: harness recall finds relevant memory entries');
+  } finally {
+    cleanup(dir);
+  }
+}
+
 // Test 5: harness map produces a Repository Impact block from a description.
 // Uses --untracked git grep so we don't need a commit (avoids depending on
 // the test environment's signing config).

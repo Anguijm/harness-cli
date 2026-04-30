@@ -30,24 +30,42 @@ When the user invokes this, do the full closeout. The goal: the next session can
    - If the plan describes work that was completed this session, mark it done or replace with the next-session pickup.
    - If the plan describes work still in progress, add a "where we left off" block at the top.
 
-5. **Append to `.harness/learnings.md`.**
+5. **Failure-mode audit — structured signal for the steering loop.**
+   - Heuristically detect failure events from this session by scanning:
+     - Recent commit messages for `fix`, `revert`, `rollback`, `hotfix`, `oops`.
+     - PR comments / council reports for verdicts of `BLOCK`, `REVISE`, `WARN`, or `FAIL`.
+     - CI runs that failed (and their fix-up commits afterwards).
+     - Hook misfires you remember — anything that needed `--no-verify`, manual override, or hook disabling.
+     - Tool calls that errored repeatedly before working.
+   - For each detected failure, ask the user one short question to fill in the schema, then append a JSONL line to `.harness/failures.jsonl`:
+     ```json
+     {"ts": "<ISO-8601>", "failure_class": "<enum>", "what_happened": "<one sentence>", "sensor_involved": "<which sensor caught or missed it>", "guide_gap": "<which guide should have prevented it>", "fix_sha": "<commit>", "canonical_backport": <bool>}
+     ```
+   - **`failure_class` enum:** one of `sensor_miss` | `sensor_false_positive` | `hook_misfire` | `council_drift` | `plan_drift` | `other`.
+   - **`sensor_involved`:** lint / typecheck / test / gitleaks / council / branch-guard / git-push-hook / drift-check / human / none.
+   - **`guide_gap`:** persona-scope / claude-md-doctrine / security-checklist / hook / settings.json / workflow-yml / none.
+   - **`canonical_backport`:** true if another repo would hit the same failure with today's canonical template; false if it's repo-specific.
+   - Skip silently if no failures detected. Most sessions won't have any.
+
+6. **Append narrative to `.harness/learnings.md`.**
    - Add a session entry with KEEP / IMPROVE / INSIGHT / COUNCIL blocks.
+   - For each failure recorded in step 5, also write a one-line human-readable narrative under IMPROVE or COUNCIL — `failures.jsonl` is the signal layer, `learnings.md` is the prose layer.
    - One-line entries are fine — but each must be a learning, not a status update.
    - Do NOT edit prior entries; append-only.
 
-6. **Update `README.md` if user-facing surface changed.**
+7. **Update `README.md` if user-facing surface changed.**
    - New commands, new env vars, new setup steps → update README.
    - If nothing user-visible changed, skip.
 
-7. **Update `SESSION_HANDOFF.md` (if the repo has one).**
+8. **Update `SESSION_HANDOFF.md` (if the repo has one).**
    - Replace contents with: current branch, last commit, next-session pickup, any blockers.
    - This is regenerated each session, not append-only.
 
-8. **Verify branch state.**
+9. **Verify branch state.**
    - `git status --porcelain` should be empty.
    - `git log @{u}..HEAD` should be empty (everything pushed).
 
-9. **Final summary to the user.**
+10. **Final summary to the user.**
    - One paragraph. What got done this session, what's next, where to resume.
    - Skip technical details unless they specifically matter for the next pickup.
    - Mention any backport PRs opened against harness-cli and their status.
