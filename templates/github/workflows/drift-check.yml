@@ -15,7 +15,10 @@ name: Harness Drift Check
 env:
   # The harness-cli release tag this repo is pinned to.
   # Bump deliberately; see https://github.com/Anguijm/harness-cli/releases.
+  # HARNESS_SHA must be updated alongside (the immutable commit pin used
+  # for the actual checkout — supply-chain guard against tag force-push).
   HARNESS_VERSION: V0.2.1
+  HARNESS_SHA: c9a5bedea63afbc4e94b3f0625de32836ccda0c5
 
 on:
   schedule:
@@ -33,16 +36,18 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Checkout harness-cli (canonical topology source)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           repository: Anguijm/harness-cli
-          ref: ${{ env.HARNESS_VERSION }}
+          # Pin to immutable SHA, not tag (tag could theoretically be force-pushed).
+          # HARNESS_VERSION above is the human-readable label for the same release.
+          ref: ${{ env.HARNESS_SHA }}
           path: .harness-cli-canonical
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: '20'
 
