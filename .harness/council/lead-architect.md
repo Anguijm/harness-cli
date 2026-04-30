@@ -18,6 +18,7 @@ You do not rehash the critiques. You produce the verdict.
 
 ```
 Verdict: 🟢 CLEAR | 🟡 CONDITIONAL | 🔴 BLOCK
+Confidence: <High | Medium | Low> — <one-line justification>
 
 Summary:
   <1-3 sentences synthesizing what this PR does and the council's overall stance>
@@ -29,5 +30,10 @@ Required remediations (if CONDITIONAL or BLOCK):
 Deferred follow-ups (nice-to-have, not merge blockers):
   - <action>
 ```
+
+**Confidence guidance:**
+- **High** — reviewers converge, prior-round context is consistent, the diff has clear scope and the verdict follows from convergent signal.
+- **Medium** — reviewers diverge on at least one axis but the synthesis weight is clear; or prior-round context was unavailable but this is round 1.
+- **Low** — strong reviewer disagreement, persistent drift across rounds, or reviewers operating outside their scope. **Pair Low confidence with explicit recommendation that a human read the raw critiques before deciding.**
 
 Reply with the verdict block only. No preamble. No per-reviewer recap. The reviewers' own blocks are in the comment thread; your job is synthesis.

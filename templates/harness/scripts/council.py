@@ -39,7 +39,8 @@ YOLO_LOG = HARNESS_DIR / "yolo_log.jsonl"
 HALT_FILE = REPO_ROOT / ".harness_halt"
 SESSION_STATE = HARNESS_DIR / "session_state.json"
 
-CALL_CAP = 15
+CALL_CAP = 20  # Hard upper bound on Gemini API calls per run (incl. retries).
+MAX_RETRIES = 1  # Per-call retry budget. Each call gets up to (1 + MAX_RETRIES) attempts.
 DEFAULT_MODEL = os.environ.get("HARNESS_MODEL", "gemini-2.5-pro")
 EXCLUDED_PERSONAS = {"lead-architect.md", "README.md"}
 
@@ -444,7 +445,7 @@ def call_gemini(
     model: str,
     prompt: str,
     budget: "RequestBudget",
-    retries: int = 2,
+    retries: int = MAX_RETRIES,
 ) -> str:
     last_err: Exception | None = None
     for attempt in range(retries + 1):
@@ -542,11 +543,20 @@ def main() -> int:
     source_label, source_text = get_plan_text(args)
     personas = load_personas()
 
-    total_calls = len(personas) + 1  # angles + lead
-    if total_calls > CALL_CAP:
+    # Pessimistic pre-flight budget check: refuse to start a run that
+    # cannot complete in the worst case (every call exhausts its retry
+    # budget). Without this, partial reviews can post mid-run aborts.
+    # Caught by the council on sportsdata #66 round 2.
+    total_personas = len(personas) + 1  # angles + lead
+    worst_case = total_personas * (MAX_RETRIES + 1)
+    if worst_case > CALL_CAP:
         die(
-            f"Persona count ({len(personas)}) + Lead Architect exceeds cap ({CALL_CAP}).\n"
-            f"Remove or disable angles in .harness/council/.",
+            f"Worst-case calls required ({worst_case}) exceed budget cap ({CALL_CAP}).\n"
+            f"  personas={len(personas)}, lead=1, max_retries={MAX_RETRIES}.\n"
+            f"To fix, choose one:\n"
+            f"  - Lower MAX_RETRIES in .harness/scripts/council.py.\n"
+            f"  - Raise CALL_CAP in .harness/scripts/council.py.\n"
+            f"  - Disable a persona by renaming <name>.md to <name>.md.disabled.",
             code=5,
         )
 
