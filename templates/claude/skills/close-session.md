@@ -65,7 +65,7 @@ When the user invokes this, do the full closeout. The goal: the next session can
    - `git status --porcelain` should be empty.
    - `git log @{u}..HEAD` should be empty (everything pushed).
 
-10. **Final summary to the user.**
+11. **Final summary to the user.**
    - One paragraph. What got done this session, what's next, where to resume.
    - Skip technical details unless they specifically matter for the next pickup.
    - Mention any backport PRs opened against harness-cli and their status.

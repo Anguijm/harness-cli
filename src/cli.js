@@ -4,6 +4,7 @@ import { init } from './commands/init.js';
 import { check } from './commands/check.js';
 import { map } from './commands/map.js';
 import { recall } from './commands/recall.js';
+import { lint } from './commands/lint.js';
 import { plan } from './commands/plan.js';
 import { review } from './commands/review.js';
 import { recipe } from './commands/recipe.js';
@@ -47,6 +48,13 @@ program
   .option('-l, --limit <n>', 'Max results (default 5)', (v) => parseInt(v, 10), 5)
   .option('-s, --source <path...>', 'Override default sources (repeatable)')
   .action(recall);
+
+program
+  .command('lint')
+  .description('Health-check .harness/ memory: stale references, orphans, schema violations, duplicate signals, empty sections, future dates')
+  .option('-f, --fix', 'Auto-fix safe issues (currently: remove orphan failures.jsonl entries)')
+  .option('--json', 'Also print issues as JSON for tooling')
+  .action(lint);
 
 program
   .command('plan <description>')

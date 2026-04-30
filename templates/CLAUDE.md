@@ -96,6 +96,8 @@ Never edit prior entries in either file; both are append-only.
 
 **Before planning anything new, run `harness recall "<topic>"`** to see what past failures and learnings on that surface have already been recorded. Cheap, prevents re-learning.
 
+**Periodically run `harness lint`** to keep the memory artifacts honest. Lint finds: stale file references (paths that no longer exist), orphan failure records (no `fix_sha`), schema violations in `failures.jsonl`, empty section blocks (template skeletons left unfilled), future-dated headers, and duplicate-signal clusters (≥3 failures with the same `failure_class | sensor_involved | guide_gap` — these usually indicate a synthesis page is needed in `learnings.md`). Run before a session-close ritual; auto-fixable issues clear with `--fix`. Without periodic lint, the memory corpus accumulates noise faster than signal — Karpathy's LLM Wiki failure mode.
+
 ## Backport rule — fixes to harness files flow upstream
 
 This repo's harness was generated from [`anguijm/harness-cli`](https://github.com/Anguijm/harness-cli). When you fix a bug or improve a file under `.harness/`, `.claude/`, `.github/workflows/`, `.husky/`, or `.gitleaks.toml`, **the fix has two homes:**

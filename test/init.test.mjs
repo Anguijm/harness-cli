@@ -129,6 +129,56 @@ function expectFile(dir, rel) {
   }
 }
 
+// Test 7: harness lint finds known issues in a synthetic dirty corpus.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    fs.mkdirSync(path.join(dir, '.harness'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      [
+        '# Learnings',
+        '',
+        '## 2099-01-01 — future-dated section',
+        '### KEEP',
+        '- this entry shouldn\'t be in the future',
+        '',
+        '## 2026-04-15 — empty section',
+        '### KEEP',
+        '',
+        '### IMPROVE',
+        '- something real',
+        '',
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(dir, '.harness/failures.jsonl'),
+      [
+        // missing required fields
+        '{"ts":"2026-04-30T00:00:00Z","not_valid":"x"}',
+        // valid but no fix_sha (orphan)
+        '{"ts":"2026-04-30T01:00:00Z","failure_class":"council_drift","what_happened":"x","sensor_involved":"council","guide_gap":"persona-scope"}',
+      ].join('\n') + '\n'
+    );
+
+    let stderr = '';
+    let exitCode = 0;
+    try {
+      run(`node "${CLI}" lint`, dir);
+    } catch (e) {
+      stderr = (e.stdout || '') + (e.stderr || '');
+      exitCode = e.status || 1;
+    }
+    assert(exitCode === 1, 'lint should exit 1 when errors present');
+    assert(stderr.includes('schema') || stderr.includes('missing required field'), 'should detect schema errors');
+    assert(stderr.includes('future-dated') || stderr.includes('date_sanity'), 'should detect future date');
+    assert(stderr.includes('empty') || stderr.includes('empty_entries'), 'should detect empty blocks');
+    console.log('PASS: harness lint detects synthetic issues');
+  } finally {
+    cleanup(dir);
+  }
+}
+
 // Test 6: harness recall finds keyword matches in learnings.md and ranks them.
 {
   const dir = makeTempRepo('node-ts');
