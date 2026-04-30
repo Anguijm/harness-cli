@@ -39,8 +39,18 @@ YOLO_LOG = HARNESS_DIR / "yolo_log.jsonl"
 HALT_FILE = REPO_ROOT / ".harness_halt"
 SESSION_STATE = HARNESS_DIR / "session_state.json"
 
-CALL_CAP = 20  # Hard upper bound on Gemini API calls per run (incl. retries).
-MAX_RETRIES = 1  # Per-call retry budget. Each call gets up to (1 + MAX_RETRIES) attempts.
+CALL_CAP = 20  # Hard upper bound on Gemini API calls per run. Sized for the
+               # canonical 7-angle reviewer set + 1 lead = 8 personas, each
+               # with worst-case (1 + MAX_RETRIES) attempts, plus headroom
+               # for one extra persona before bumping. To raise: also raise
+               # MONTHLY_CAP in council.yml to keep the per-run × runs/month
+               # ratio sane.
+MAX_RETRIES = 1  # Per-call retry budget. Set to 1 to handle transient API
+                 # flakes (one retry on failure) without doubling cost+runtime
+                 # on persistent failures. Raise only if the model returns
+                 # genuinely flaky output for some classes of prompts; lower
+                 # to 0 if cost is the binding constraint and you accept
+                 # rare incomplete reviews.
 DEFAULT_MODEL = os.environ.get("HARNESS_MODEL", "gemini-2.5-pro")
 EXCLUDED_PERSONAS = {"lead-architect.md", "README.md"}
 
