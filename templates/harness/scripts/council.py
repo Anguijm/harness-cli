@@ -258,8 +258,12 @@ def fetch_prior_round_context(pr_number: int) -> tuple[str, bool]:
         return "", True
 
     try:
+        # --slurp merges multi-page output into a single JSON document.
+        # Without it, --paginate concatenates one JSON array per page, which
+        # json.loads can't parse on PRs with comments spanning multiple pages.
+        # Caught by Codex on sportsdata #66 review.
         result = subprocess.run(
-            ["gh", "api", "--paginate", f"repos/{repo}/issues/{pr_number}/comments"],
+            ["gh", "api", "--paginate", "--slurp", f"repos/{repo}/issues/{pr_number}/comments"],
             capture_output=True,
             text=True,
             cwd=REPO_ROOT,
@@ -272,8 +276,17 @@ def fetch_prior_round_context(pr_number: int) -> tuple[str, bool]:
                 file=sys.stderr,
             )
             return "", True
-        # --paginate outputs a single merged JSON array.
-        comments = json.loads(result.stdout)
+        # --paginate --slurp emits a single JSON array containing one entry
+        # per page (each entry being the page's own array). Flatten to a
+        # flat list of comments. Single-page result is `[[c1, c2]]` which
+        # flattens to `[c1, c2]`.
+        pages = json.loads(result.stdout)
+        if isinstance(pages, list) and pages and isinstance(pages[0], list):
+            comments = [c for page in pages for c in page]
+        else:
+            # Fallback: if --slurp wasn't honored or output shape is
+            # unexpected, treat it as a flat list directly.
+            comments = pages
     except Exception as e:
         print(f"[council] Warning: could not fetch PR comments ({e}); no prior context.", file=sys.stderr)
         return "", True

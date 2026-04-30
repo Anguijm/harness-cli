@@ -46,7 +46,12 @@ jobs:
         run: npm run lint --if-present
 
       - name: Typecheck
-        run: npm run typecheck --if-present
+        # Try both common script names — repos use either `typecheck` or
+        # `type-check`. --if-present silently skips missing scripts, so
+        # whichever exists wins; if neither, this step is a no-op.
+        run: |
+          npm run typecheck --if-present
+          npm run type-check --if-present
 
       - name: Test
         run: npm test --if-present

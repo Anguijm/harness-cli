@@ -11,9 +11,13 @@ if [ -f package.json ]; then
     echo "[husky] lint..."
     npm run lint
   fi
+  # Run whichever typecheck script the repo defines.
   if grep -q '"typecheck"' package.json; then
     echo "[husky] typecheck..."
     npm run typecheck
+  elif grep -q '"type-check"' package.json; then
+    echo "[husky] type-check..."
+    npm run type-check
   fi
 fi
 
