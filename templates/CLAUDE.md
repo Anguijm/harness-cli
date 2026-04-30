@@ -63,6 +63,19 @@ When a sensor catches something that the guides should have prevented (a council
 
 Append the lesson to `.harness/learnings.md` (KEEP / IMPROVE / INSIGHT / COUNCIL block). Never edit prior entries; append-only.
 
+## Backport rule — fixes to harness files flow upstream
+
+This repo's harness was generated from [`anguijm/harness-cli`](https://github.com/Anguijm/harness-cli). When you fix a bug or improve a file under `.harness/`, `.claude/`, `.github/workflows/`, `.husky/`, or `.gitleaks.toml`, **the fix has two homes:**
+
+1. **This repo** — land it as a normal PR.
+2. **harness-cli** — propose the same change against the canonical template, so other repos benefit when they upgrade their pinned `HARNESS_VERSION`.
+
+If you don't backport, every other repo will hit the same bug independently. The downstream repos pinned to a canonical version (`HARNESS_VERSION` in `.github/workflows/drift-check.yml`) won't see the fix until you cut a new harness-cli release tag and they bump.
+
+**What's NOT backported:** repo-specific customizations. A persona's `## Scope` section tailored to this repo, the security checklist's repo-specific entries, custom guard steps in council.yml (e.g., a grep that bans a specific anti-pattern in this repo's code) — those stay here. The line is: "would another repo benefit from this exact change?" If yes, backport.
+
+The `close-session` skill checks for harness-file edits at session end and prompts you about backporting before closing.
+
 ## Communication style
 
 Default to plain language. Tell the user what you're doing in normal words ("committing your changes", "checking the council verdict", "pushing"), not in code or file paths. Surface technical detail (diffs, commands, file lists) only when the user asks or when a decision genuinely depends on it.

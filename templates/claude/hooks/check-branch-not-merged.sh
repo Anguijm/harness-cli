@@ -36,6 +36,14 @@ if ! echo "$cmd" | grep -qE '(^|[[:space:]])git[[:space:]]+push([[:space:]]|$)';
   exit 0
 fi
 
+# False-positive guard for chained commands: if the command also contains
+# `git commit`, the commit runs before the push (shell && semantics), so
+# new content will exist by the time the push executes. Allow the chain
+# unconditionally. (Backported from sportsdata debt #30.)
+if echo "$cmd" | grep -qE '(^|[[:space:]])git[[:space:]]+commit([[:space:]]|$|[[:space:]]-)'; then
+  exit 0
+fi
+
 toplevel=$(git rev-parse --show-toplevel 2>/dev/null || true)
 if [ -z "$toplevel" ]; then
   exit 0

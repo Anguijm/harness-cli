@@ -7,6 +7,15 @@ name: Harness Drift Check
 #
 # On drift: opens (or updates) a single tracking issue with the report.
 # Manual run: workflow_dispatch.
+#
+# Pinning: HARNESS_VERSION below pins the canonical version this repo
+# compares itself against. Bump it deliberately when you want to upgrade
+# this repo to a newer harness release.
+
+env:
+  # The harness-cli release tag this repo is pinned to.
+  # Bump deliberately; see https://github.com/Anguijm/harness-cli/releases.
+  HARNESS_VERSION: v0.2.0
 
 on:
   schedule:
@@ -30,7 +39,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Anguijm/harness-cli
-          ref: main
+          ref: ${{ env.HARNESS_VERSION }}
           path: .harness-cli-canonical
 
       - uses: actions/setup-node@v4
@@ -54,11 +63,17 @@ jobs:
             {
               echo "## Harness drift detected"
               echo
+              echo "Pinned to harness-cli **${{ env.HARNESS_VERSION }}**."
+              echo
               echo '```'
               cat drift.txt
               echo '```'
               echo
-              echo "Run \`harness init --update\` from a checkout of [Anguijm/harness-cli](https://github.com/Anguijm/harness-cli) to add missing files. For modified files, review manually — they may be repo-specific customizations or genuine drift."
+              echo "**Missing files:** run \`harness init --update\` from a checkout of [Anguijm/harness-cli@${{ env.HARNESS_VERSION }}](https://github.com/Anguijm/harness-cli/tree/${{ env.HARNESS_VERSION }}) to add them."
+              echo
+              echo "**Modified files:** these may be intentional repo-specific customizations or stale copies of an older canonical version. Review manually."
+              echo
+              echo "**To upgrade to a newer harness release:** bump \`HARNESS_VERSION\` in \`.github/workflows/drift-check.yml\`, then re-run this workflow. See https://github.com/Anguijm/harness-cli/releases."
             } > issue-body.md
           fi
 
