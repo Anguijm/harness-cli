@@ -15,7 +15,7 @@ name: Harness Drift Check
 env:
   # The harness-cli release tag this repo is pinned to.
   # Bump deliberately; see https://github.com/Anguijm/harness-cli/releases.
-  HARNESS_VERSION: v0.2.0
+  HARNESS_VERSION: V0.2.0
 
 on:
   schedule:
