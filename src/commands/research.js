@@ -91,7 +91,24 @@ RELATED_PRIOR_LEARNINGS:
 function loadResearchConfig(cwd) {
   const out = { model: DEFAULT_MODEL, max_personas: null };
   const cfg = loadHarnessConfig(cwd);
-  if (!cfg.ok || !cfg.parsed) return out;
+  // Fail loud on a malformed harness.yml, same policy harness check uses.
+  // Silent-fallback would let a typo in the research: block silently
+  // bump everyone back to the default Pro panel — at potentially 2× cost
+  // (since the user might have configured max_personas: 4) — without any
+  // surface signal that the config is being ignored. Bugs reviewer R1
+  // PR #8 flagged the silent-fallback as a real defect.
+  if (!cfg.ok) {
+    console.error(
+      chalk.red(`harness.yml could not be parsed: ${cfg.error.message}`)
+    );
+    console.error(
+      chalk.dim(
+        `  Path: ${path.join(cwd, 'harness.yml')}\n  Fix the YAML syntax error and re-run.`
+      )
+    );
+    process.exit(EXIT_CONFIG_OR_RUNTIME_ERROR);
+  }
+  if (!cfg.parsed) return out;
   const block = cfg.parsed.research;
   if (!block || typeof block !== 'object') return out;
   if (typeof block.model === 'string' && block.model.length > 0) {
@@ -111,6 +128,10 @@ function buildRecallContext(cwd, query) {
   // Lightweight keyword scoring — same shape recall uses. We don't pull
   // recall.js's full scorer here to avoid coupling; the goal is just a
   // rough top-N that lets the personas see related history.
+  // Drop 1- and 2-letter words (a, an, in, of, to, ...) — they're
+  // common stop-tokens that match every chunk and dilute the score.
+  // Same threshold the existing `harness recall` tokenizer uses, kept
+  // consistent so research's recall context tracks recall's ranking.
   const tokens = (query.toLowerCase().match(/[a-z][a-z0-9_-]+/g) || [])
     .filter((t) => t.length > 2);
   if (tokens.length === 0) return '';
@@ -132,6 +153,10 @@ function buildRecallContext(cwd, query) {
   if (scored.length === 0) return '';
 
   // Truncate each excerpt and the whole block to MAX_CONTEXT_CHARS.
+  // Floor of 400 chars/item: even when 5 hits divide the budget evenly,
+  // each excerpt should be long enough to convey the gist of the
+  // section header + first KEEP/INSIGHT bullet. Below ~400 chars the
+  // truncation strips the actual learning and only the title survives.
   const perItemCap = Math.max(
     400,
     Math.floor(MAX_CONTEXT_CHARS / scored.length)
@@ -139,6 +164,11 @@ function buildRecallContext(cwd, query) {
   const parts = scored.map(({ chunk }) => {
     let text = chunk.text;
     if (text.length > perItemCap) {
+      // 60% head / 30% tail (10% lost to the elision marker). Bias
+      // toward the head because section headers + first KEEP / INSIGHT
+      // bullet are the most informative; the tail is usually
+      // continuation context. 50/50 also works but loses the header
+      // when chunks are long.
       const head = text.slice(0, Math.floor(perItemCap * 0.6));
       const tail = text.slice(-Math.floor(perItemCap * 0.3));
       text = `${head}\n... [middle elided] ...\n${tail}`;
@@ -223,6 +253,9 @@ function parsePersonaResponse(text) {
     const headerRe = new RegExp(`(?:^|\\n)\\s*${key}:\\s*`, 'm');
     const headerMatch = headerRe.exec(text);
     if (!headerMatch) {
+      // 200-char snippet: enough to diagnose a format error (the
+      // model usually starts deviating early in the response) without
+      // dumping a full multi-paragraph body into the console.
       throw new Error(
         `Persona response missing ${key} section. First 200 chars: ${text.slice(0, 200)}`
       );
@@ -314,7 +347,12 @@ function writeResearchToPlan(cwd, block) {
     const after = body.slice(endIdx + RESEARCH_BLOCK_END.length);
     body = `${before}${block}${after}`;
   } else {
-    // Prepend after any leading H1 line so the block sits at the top.
+    // First-time write: insert below any leading "# Plan title" H1 so
+    // the Research block sits between the title and the body. If the
+    // file has no H1 (or starts with body text), prepend at the top.
+    // This keeps the auto-generated block visually grouped with the
+    // header rather than showing up before the title and pushing it
+    // down on every research run.
     const lines = body.split('\n');
     let insertAt = 0;
     while (insertAt < lines.length && lines[insertAt].trim() === '') insertAt++;
@@ -485,7 +523,54 @@ export async function research(description, options, deps = {}) {
     process.exit(0);
   }
 
-  const planPath = writeResearchToPlan(cwd, block);
+  // Exclusive lock around the read-modify-write on active_plan.md.
+  // Without this, two concurrent `harness research` runs (the
+  // ~15s execution window makes this plausible) can race: each reads
+  // the same baseline, generates a Research block, and last-writer
+  // wins, silently destroying the other's output. Same `wx` lock-file
+  // pattern synthesize and reindex ship. Bugs reviewer R1 PR #8
+  // flagged this.
+  const lockPath = path.join(cwd, '.harness/.research.lock');
+  let lockFd;
+  try {
+    fs.mkdirSync(path.join(cwd, '.harness'), { recursive: true });
+    lockFd = fs.openSync(lockPath, 'wx');
+    fs.writeSync(
+      lockFd,
+      `pid ${process.pid} acquired ${new Date().toISOString()}\n`
+    );
+  } catch (e) {
+    if (e.code === 'EEXIST') {
+      console.error(
+        chalk.red(
+          `Another harness research appears to be running (lock file exists at ${path.relative(cwd, lockPath)}).`
+        )
+      );
+      console.error(
+        chalk.dim(
+          '  If no other run is in progress, the previous run crashed before releasing — delete the lock file and retry.'
+        )
+      );
+      process.exit(EXIT_CONFIG_OR_RUNTIME_ERROR);
+    }
+    throw e;
+  }
+
+  let planPath;
+  try {
+    planPath = writeResearchToPlan(cwd, block);
+  } finally {
+    try {
+      fs.closeSync(lockFd);
+    } catch {
+      // intentionally swallowed — releasing the lock is best-effort
+    }
+    try {
+      fs.unlinkSync(lockPath);
+    } catch {
+      // intentionally swallowed — releasing the lock is best-effort
+    }
+  }
 
   const okCount = results.filter((r) => r.ok).length;
   const failCount = results.length - okCount;
