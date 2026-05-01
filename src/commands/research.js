@@ -516,10 +516,29 @@ export async function research(description, options, deps = {}) {
     }
   });
 
+  const okCountEarly = results.filter((r) => r.ok).length;
   const block = formatResearchBlock(description, results, model, (deps.now || isoDateUtc)());
+
+  // Codex P1 PR #8: when EVERY persona failed (e.g., invalid API key,
+  // quota outage, consistent malformed response) the run produced no
+  // useful research output. The block is just a list of failure
+  // messages. Exit non-zero so downstream automation (commit hooks,
+  // CI scripts that chain `research && plan && push`) treats this as
+  // failure rather than silently proceeding with an empty block.
+  // Mixed success/failure (some personas worked) still exits 0 — the
+  // planner has actionable output and knows which angles are missing.
+  const allFailed = okCountEarly === 0 && results.length > 0;
 
   if (noWrite) {
     console.log(block);
+    if (allFailed) {
+      console.error(
+        chalk.red(
+          `All ${results.length} persona(s) failed. No research signal produced.`
+        )
+      );
+      process.exit(EXIT_CONFIG_OR_RUNTIME_ERROR);
+    }
     process.exit(0);
   }
 
@@ -579,6 +598,18 @@ export async function research(description, options, deps = {}) {
       `Wrote ## Research block to ${path.relative(cwd, planPath)} — ${okCount} persona(s) succeeded${failCount > 0 ? `, ${failCount} failed` : ''}.`
     )
   );
+  if (allFailed) {
+    // Same fail-loud rationale as the noWrite path above. The block was
+    // still written so the planner can see which personas failed and
+    // why, but the exit code signals failure to any chained automation.
+    console.error(
+      chalk.red(
+        `All ${results.length} persona(s) failed. The Research block records the errors but contains no usable signal.`
+      )
+    );
+    process.exit(EXIT_CONFIG_OR_RUNTIME_ERROR);
+  }
+
   console.log(
     chalk.dim(
       'Review the block, refine the plan body below it, then commit and proceed to implementation.'

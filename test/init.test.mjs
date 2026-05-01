@@ -1152,39 +1152,44 @@ function expectFile(dir, rel) {
   const dir = makeTempRepo('node-ts');
   try {
     run(`node "${CLI}" init`, dir);
-    const driver = `
-      import { research } from '${path.resolve('src/commands/research.js')}';
-      let calls = 0;
-      const stubFetch = async ({ systemPrompt }) => {
-        calls += 1;
-        const nameMatch = systemPrompt.match(/^#\\\\s+(\\\\S+)/m);
-        const name = nameMatch ? nameMatch[1] : 'unknown';
-        if (calls === 1) {
-          return 'this is malformed; no headers at all';
-        }
-        return [
-          'PERSONA: ' + name,
-          '',
-          'CONCERNS:',
-          '- only this persona returned cleanly',
-          '',
-          'OPEN_QUESTIONS:',
-          '- none',
-          '',
-          'RELATED_PRIOR_LEARNINGS:',
-          'none',
-        ].join('\\\\n');
-      };
-      process.env.GEMINI_API_KEY = 'stub';
-      process.chdir(${JSON.stringify(dir)});
-      research(
-        'fail-soft test',
-        { maxPersonas: 2 },
-        { geminiFetch: stubFetch }
-      ).catch(e => { console.error(e); process.exit(99); });
-    `;
+    // Build the driver as an array of source lines so we can use real
+    // newline characters (\n in this test source = real newline in the
+    // joined string = real newline in the driver file). The earlier
+    // backtick-template version had to escape the newlines for the
+    // join('...') separator and got the escape level wrong, masking
+    // both responses as malformed.
+    const NL = String.fromCharCode(10);
+    const cleanResponse =
+      'PERSONA: PERSONA_NAME' + NL +
+      '' + NL +
+      'CONCERNS:' + NL +
+      '- only this persona returned cleanly' + NL +
+      '' + NL +
+      'OPEN_QUESTIONS:' + NL +
+      '- none' + NL +
+      '' + NL +
+      'RELATED_PRIOR_LEARNINGS:' + NL +
+      'none';
+    const driverLines = [
+      `import { research } from '${path.resolve('src/commands/research.js')}';`,
+      'let calls = 0;',
+      'const stubFetch = async () => {',
+      '  calls += 1;',
+      '  if (calls === 1) {',
+      '    return "this is malformed; no headers at all";',
+      '  }',
+      `  return ${JSON.stringify(cleanResponse)};`,
+      '};',
+      'process.env.GEMINI_API_KEY = "stub";',
+      `process.chdir(${JSON.stringify(dir)});`,
+      'research(',
+      '  "fail-soft test",',
+      '  { maxPersonas: 2 },',
+      '  { geminiFetch: stubFetch }',
+      ').catch(e => { console.error(e); process.exit(99); });',
+    ];
     const driverPath = path.join(dir, '_driver.mjs');
-    fs.writeFileSync(driverPath, driver);
+    fs.writeFileSync(driverPath, driverLines.join('\n'));
     execSync(`node "${driverPath}"`, {
       cwd: dir,
       encoding: 'utf8',
@@ -1203,6 +1208,61 @@ function expectFile(dir, rel) {
       'expected the surviving persona content present'
     );
     console.log('PASS: harness research fail-soft on a single persona malformed response');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 31: every persona failing produces a non-zero exit (Codex P1 PR #8).
+// Fail-loud contract: a research run with zero successful personas is a
+// failure, even if a Research block was still written with the error
+// listing. Without this, automation that chains
+// `research && plan && push` would treat a totally-failed run as OK.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    const driver = `
+      import { research } from '${path.resolve('src/commands/research.js')}';
+      const stubFetch = async () => {
+        throw new Error('simulated upstream failure for every persona');
+      };
+      process.env.GEMINI_API_KEY = 'stub';
+      process.chdir(${JSON.stringify(dir)});
+      research(
+        'all personas should fail',
+        { maxPersonas: 2 },
+        { geminiFetch: stubFetch }
+      ).catch(e => { console.error(e); process.exit(99); });
+    `;
+    const driverPath = path.join(dir, '_driver_allfail.mjs');
+    fs.writeFileSync(driverPath, driver);
+    let err;
+    try {
+      execSync(`node "${driverPath}"`, {
+        cwd: dir,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      });
+    } catch (e) {
+      err = e;
+    }
+    assert(err, 'expected non-zero exit when every persona fails');
+    assert(
+      err.status === 2,
+      `expected exit code 2 (config/runtime error), got ${err.status}`
+    );
+    // Block should still be written with the failure list — useful signal
+    // for the operator even if exit was non-zero.
+    const plan = fs.readFileSync(
+      path.join(dir, '.harness/active_plan.md'),
+      'utf8'
+    );
+    assert(
+      plan.includes('Personas that failed'),
+      'expected failed-personas section in plan even when all failed'
+    );
+    console.log('PASS: harness research exits non-zero when every persona fails');
   } finally {
     cleanup(dir);
   }
