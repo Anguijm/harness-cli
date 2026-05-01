@@ -201,8 +201,13 @@ export async function recall(query, options) {
   for (const hit of scored) {
     const links = extractLinks(hit.chunk.text);
     for (const linkText of links) {
-      const { chunk: target } = findChunkBySlug(chunks, linkText);
+      const { chunk: target, ambiguous } = findChunkBySlug(chunks, linkText);
       if (!target) continue;
+      // Skip ambiguous resolutions — silently picking the first of
+      // several plausible matches is worse than not following the link.
+      // `harness lint` separately surfaces these as ambiguous_links
+      // warnings so the author can disambiguate. (Bugs reviewer R2 PR #3.)
+      if (ambiguous) continue;
       if (seen.has(target.text)) continue;
       seen.add(target.text);
       linked.push({

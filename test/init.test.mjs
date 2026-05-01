@@ -161,6 +161,50 @@ function expectFile(dir, rel) {
   }
 }
 
+// Test 10: ambiguous [[link]] — lint warns, recall does not silently pick.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    fs.mkdirSync(path.join(dir, '.harness'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      [
+        '# Learnings',
+        '',
+        '## 2026-05-01 — alpha unique direct hit',
+        '### IMPROVE',
+        '- See [[shared]] for context.',
+        '',
+        '## 2026-05-02 — shared topic v1',
+        '### KEEP',
+        '- one of two collisions',
+        '',
+        '## 2026-05-03 — shared topic v2',
+        '### KEEP',
+        '- the other collision',
+        '',
+      ].join('\n')
+    );
+    let lintOut = '';
+    try {
+      lintOut = run(`node "${CLI}" lint`, dir);
+    } catch (e) {
+      lintOut = (e.stdout || '') + (e.stderr || '');
+    }
+    assert(lintOut.includes('ambiguous_links'), 'lint should flag ambiguous [[shared]]');
+
+    const recallOut = run(`node "${CLI}" recall "alpha"`, dir);
+    assert(recallOut.includes('alpha unique'), 'recall should find direct hit');
+    assert(
+      !recallOut.includes('linked via'),
+      'recall should NOT follow ambiguous link silently'
+    );
+    console.log('PASS: ambiguous [[link]] — lint warns, recall skips silently');
+  } finally {
+    cleanup(dir);
+  }
+}
+
 // Test 9: harness lint flags broken [[wiki-style]] links.
 {
   const dir = makeTempRepo('node-ts');
