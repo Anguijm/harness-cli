@@ -1,9 +1,44 @@
 import fs from 'fs';
 import path from 'path';
+import yaml from 'js-yaml';
 
 /**
- * Load and parse harness.yml config.
- * Simple YAML parser — handles key: value, nested objects, and arrays.
+ * Load harness.yml relative to `cwd` and return a structured result.
+ *
+ * Used by every command/library that reads harness.yml: recall, reindex,
+ * recall_corpus, synthesize, check. Council R1 PR #7 asked for a single
+ * helper so the file I/O and parse logic don't drift across modules; the
+ * per-caller behavior on parse failure (warn vs fatal vs silent fallback)
+ * stays at the caller because each command has different correctness
+ * implications when its config block is missing.
+ *
+ * Shape:
+ *   { ok: true,  parsed: null, exists: false }       — no harness.yml
+ *   { ok: true,  parsed: <object>, exists: true }   — parsed cleanly
+ *   { ok: false, parsed: null, exists: true, error } — present but unparseable
+ *
+ * @param {string} cwd
+ * @returns {{ok: boolean, parsed: any, exists: boolean, error?: Error}}
+ */
+export function loadHarnessConfig(cwd) {
+  const cfgPath = path.join(cwd, 'harness.yml');
+  if (!fs.existsSync(cfgPath)) {
+    return { ok: true, parsed: null, exists: false };
+  }
+  try {
+    const parsed = yaml.load(fs.readFileSync(cfgPath, 'utf8'));
+    return { ok: true, parsed, exists: true };
+  } catch (e) {
+    return { ok: false, parsed: null, exists: true, error: e };
+  }
+}
+
+/**
+ * Legacy loader retained for plan.js / recipe.js / learn.js, which
+ * predate the js-yaml migration and use a hand-rolled parser. Migrating
+ * them is its own PR — until then, new callers should use
+ * loadHarnessConfig above (which uses js-yaml and returns a structured
+ * result rather than papering over absence with defaults).
  */
 export function loadConfig(cwd) {
   const configPath = path.join(cwd, 'harness.yml');

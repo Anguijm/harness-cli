@@ -684,4 +684,269 @@ function expectFile(dir, rel) {
   }
 }
 
+// Test 19: harness reindex builds an embeddings index from the corpus.
+// Uses the deterministic stub vector so we can compare hashes.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      [
+        '# Learnings',
+        '',
+        '## 2026-04-29 — council drift on roadtripper',
+        '### KEEP',
+        '- pre-flight budget races are real',
+        '',
+        '## 2026-04-30 — a11y persona invented i18n requirements',
+        '### INSIGHT',
+        '- persona scope was too vague; tighten with explicit boundaries',
+        '',
+      ].join('\n')
+    );
+    const env = {
+      ...process.env,
+      HARNESS_EMBED_STUB_RESPONSE: '{"deterministic":true}',
+    };
+    execSync(`node "${CLI}" reindex`, {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: 'pipe',
+      env,
+    });
+    const indexPath = path.join(dir, '.harness/embeddings.json');
+    assert(fs.existsSync(indexPath), 'expected .harness/embeddings.json to be written');
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    assert(index.version === 1, 'expected index version 1');
+    assert(typeof index.model === 'string' && index.model.length > 0, 'expected model name');
+    assert(
+      Object.keys(index.entries).length >= 2,
+      `expected at least 2 entries, got ${Object.keys(index.entries).length}`
+    );
+    for (const [hash, entry] of Object.entries(index.entries)) {
+      assert(/^[0-9a-f]{16}$/.test(hash), `expected 16-hex hash, got ${hash}`);
+      assert(Array.isArray(entry.vector), 'expected entry.vector array');
+      assert(entry.vector.length > 0, 'expected non-empty vector');
+    }
+    console.log('PASS: harness reindex builds an index from the corpus');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 20: incremental reindex on an unchanged corpus is a no-op (no API calls).
+// Asserts by counting calls to the stub: we use the deterministic stub which
+// is just a hash, but if the index is reused, the "to embed" count is zero.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      ['# Learnings', '', '## 2026-04-29 — only entry', 'body', ''].join('\n')
+    );
+    const env = {
+      ...process.env,
+      HARNESS_EMBED_STUB_RESPONSE: '{"deterministic":true}',
+    };
+    execSync(`node "${CLI}" reindex`, { cwd: dir, encoding: 'utf8', stdio: 'pipe', env });
+    const out = execSync(`node "${CLI}" reindex`, {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: 'pipe',
+      env,
+    });
+    assert(
+      out.includes('to embed     0') || out.includes('Index is up to date'),
+      `expected zero embeds on a stable corpus, got: ${out}`
+    );
+    console.log('PASS: incremental harness reindex is a no-op on unchanged corpus');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 21: harness recall blends vector similarity into ranking.
+// Builds an index, queries with a phrase that has zero keyword overlap with
+// a chunk, and asserts the chunk surfaces (could not happen with keyword-only).
+// Uses the deterministic stub so the same input text always yields the same
+// vector — making the embedding of the chunk and the embedding of a near-
+// equivalent query phrase strongly cosine-similar.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    // The stub vector is deterministic in its INPUT TEXT — so to get a
+    // semantic-blend hit we use the trick of embedding identical text on
+    // both sides. The query is the same string as the chunk header, but
+    // the keyword tokenizer drops short words and stopwords, so a query
+    // of just stopwords yields empty queryTokens and the keyword scorer
+    // returns 0; vector blend then carries the result.
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      [
+        '# Learnings',
+        '',
+        '## 2026-04-30 — quokka migration',
+        'long-form notes about the quokka migration and friends',
+        '',
+      ].join('\n')
+    );
+    const env = {
+      ...process.env,
+      HARNESS_EMBED_STUB_RESPONSE: '{"deterministic":true}',
+    };
+    execSync(`node "${CLI}" reindex`, { cwd: dir, encoding: 'utf8', stdio: 'pipe', env });
+    // Query is exact text of the chunk header so vector similarity is
+    // maximal; the keyword scorer sees "quokka" "migration" as direct
+    // hits anyway, so this test checks the blend doesn't *break* existing
+    // behavior. The next test asserts a no-keyword-overlap path.
+    const out = execSync(
+      `node "${CLI}" recall "quokka migration" --limit 1`,
+      { cwd: dir, encoding: 'utf8', stdio: 'pipe', env }
+    );
+    assert(out.includes('quokka migration'), `expected match, got: ${out}`);
+    console.log('PASS: harness recall surfaces matches with vector index present');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 22: --no-vector bypasses the index even when present.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      ['# Learnings', '', '## 2026-04-30 — keyword target', 'body about specific term zoofoo here', ''].join('\n')
+    );
+    const env = {
+      ...process.env,
+      HARNESS_EMBED_STUB_RESPONSE: '{"deterministic":true}',
+    };
+    execSync(`node "${CLI}" reindex`, { cwd: dir, encoding: 'utf8', stdio: 'pipe', env });
+    const withVec = execSync(
+      `node "${CLI}" recall "zoofoo" --limit 1`,
+      { cwd: dir, encoding: 'utf8', stdio: 'pipe', env }
+    );
+    const noVec = execSync(
+      `node "${CLI}" recall "zoofoo" --limit 1 --no-vector`,
+      { cwd: dir, encoding: 'utf8', stdio: 'pipe', env }
+    );
+    // Both should surface the keyword match; only difference is whether the
+    // vector blend ran. Asserting both succeed is enough — the blend code
+    // path is exercised by the previous test.
+    assert(withVec.includes('zoofoo'), 'expected vector-on path to find keyword match');
+    assert(noVec.includes('zoofoo'), 'expected --no-vector path to find keyword match');
+    console.log('PASS: --no-vector bypasses the blend without breaking recall');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 23a: PURE semantic match — query has zero keyword overlap with the
+// target chunk; only the vector blend can surface it. Bugs reviewer R1 PR #7
+// flagged this as the missing core-value test. Uses the stub's "map" mode
+// to wire up controlled cosine relationships between unrelated text strings.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      [
+        '# Learnings',
+        '',
+        '## 2026-04-01 — wallaby observations',
+        'notes about marsupials and their habits',
+        '',
+        '## 2026-04-15 — dishwasher repair log',
+        'notes about kitchen appliance fixes',
+        '',
+      ].join('\n')
+    );
+    // Stub map: any text containing "wallaby" or "quokka" gets the same
+    // vector; "dishwasher" gets an orthogonal vector. Query "quokka" has
+    // ZERO keyword overlap with "wallaby observations", so keyword score
+    // is 0 for both chunks. Vector blend distinguishes them.
+    const stubMap = {
+      map: {
+        wallaby: [1, 0, 0, 0],
+        quokka: [1, 0, 0, 0],
+        dishwasher: [0, 0, 0, 1],
+      },
+    };
+    const env = {
+      ...process.env,
+      HARNESS_EMBED_STUB_RESPONSE: JSON.stringify(stubMap),
+    };
+    execSync(`node "${CLI}" reindex`, {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: 'pipe',
+      env,
+    });
+    const out = execSync(
+      `node "${CLI}" recall "quokka" --limit 2`,
+      { cwd: dir, encoding: 'utf8', stdio: 'pipe', env }
+    );
+    // Wallaby chunk must surface — it has zero shared tokens with "quokka"
+    // but the stub gives them an identical vector, proving the blend
+    // carries the result when keyword scoring returns 0.
+    assert(
+      out.includes('wallaby observations'),
+      `expected pure semantic match to surface wallaby chunk; got:\n${out}`
+    );
+    // The dishwasher chunk has an orthogonal vector AND no keyword
+    // overlap with "quokka" — it must NOT outrank wallaby.
+    const wallabyIdx = out.indexOf('wallaby observations');
+    const dishwasherIdx = out.indexOf('dishwasher repair log');
+    if (dishwasherIdx >= 0) {
+      assert(
+        wallabyIdx < dishwasherIdx,
+        `expected wallaby ranked above dishwasher; got wallaby@${wallabyIdx}, dishwasher@${dishwasherIdx}`
+      );
+    }
+    console.log('PASS: pure semantic match surfaces zero-keyword-overlap chunk');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 23: harness reindex without GEMINI_API_KEY (or stub) fails loud.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      ['# Learnings', '', '## 2026-04-30 — sample', 'body', ''].join('\n')
+    );
+    const env = { ...process.env };
+    delete env.GEMINI_API_KEY;
+    delete env.HARNESS_EMBED_STUB_RESPONSE;
+    let err;
+    try {
+      execSync(`node "${CLI}" reindex`, {
+        cwd: dir,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env,
+      });
+    } catch (e) {
+      err = e;
+    }
+    assert(err, 'expected non-zero exit without API key');
+    assert(
+      String(err.stderr || '').includes('GEMINI_API_KEY not set'),
+      `expected fail-loud message, got: ${err.stderr}`
+    );
+    console.log('PASS: harness reindex fails loud without API key');
+  } finally {
+    cleanup(dir);
+  }
+}
+
 console.log('All tests passed.');

@@ -1,0 +1,226 @@
+// Vector-embedding index for harness recall.
+//
+// Stores per-chunk embeddings in .harness/embeddings.json so `harness
+// recall` can blend semantic similarity with the existing keyword × recency
+// score. Index is content-hash keyed, so unchanged chunks are reused
+// across reindex runs (incremental is the default; --full forces re-embed).
+//
+// API key flows via the `x-goog-api-key` header (PR #6 R2 fix), never as
+// a URL query parameter. Sanitizer strips control chars and zero-width
+// Unicode before sending text upstream — same discipline synthesize uses.
+
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import { sanitizeUntrusted } from './sanitize.js';
+
+export const INDEX_VERSION = 1;
+export const INDEX_PATH = '.harness/embeddings.json';
+// Default Gemini embedding model. text-embedding-004 produces 768-dim
+// vectors; cheaper than the older text-embedding-001 and good enough for
+// the corpus sizes harness repos hit (≤ a few hundred chunks).
+export const DEFAULT_EMBEDDING_MODEL = 'text-embedding-004';
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+// Exit code shared with synthesize for any config / runtime / API error.
+export const EXIT_CONFIG_OR_RUNTIME_ERROR = 2;
+
+export function chunkContentHash(text) {
+  // 16 hex chars = 64 bits — same length and rationale as synthesize's
+  // signature hash. Collision probability < 3e-10 at 100K chunks.
+  return crypto
+    .createHash('sha256')
+    .update(text)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+export function loadIndex(cwd) {
+  const p = path.join(cwd, INDEX_PATH);
+  if (!fs.existsSync(p)) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    // Corrupt file — caller treats as missing; reindex regenerates from
+    // scratch. We don't try to repair, since the cost of regeneration is
+    // small and silent partial recovery would mask data corruption.
+    return null;
+  }
+  if (
+    !parsed ||
+    parsed.version !== INDEX_VERSION ||
+    typeof parsed.entries !== 'object' ||
+    parsed.entries === null
+  ) {
+    return null;
+  }
+  return parsed;
+}
+
+export function saveIndex(cwd, index) {
+  const p = path.join(cwd, INDEX_PATH);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(index, null, 2));
+}
+
+export function emptyIndex(model) {
+  return { version: INDEX_VERSION, model, entries: {} };
+}
+
+// Default Gemini caller — direct fetch to the embedding REST endpoint.
+// Test seam: callers can override via the `fetchImpl` parameter.
+async function callGeminiEmbedDefault({ text, apiKey, model, fetchImpl }) {
+  const fetcher = fetchImpl || fetch;
+  const url = `${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:embedContent`;
+  const body = {
+    content: { parts: [{ text }] },
+  };
+  const res = await fetcher(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '<unreadable>');
+    // Cap at 300 chars: long Google API error bodies (HTML pages on
+    // outages, multi-paragraph quota explanations) flood the console
+    // and bury the status code. The first 300 chars carry the actual
+    // error code and message in every observed shape.
+    throw new Error(
+      `Gemini embed API ${res.status} ${res.statusText}: ${errText.slice(0, 300)}`
+    );
+  }
+  const json = await res.json();
+  const vector = json?.embedding?.values;
+  if (!Array.isArray(vector) || vector.length === 0 || !vector.every((v) => typeof v === 'number')) {
+    throw new Error(
+      // Same 300-char cap as above — keep error noise bounded.
+      `Gemini embed returned no vector. Response head: ${JSON.stringify(json).slice(0, 300)}`
+    );
+  }
+  return vector;
+}
+
+export async function embed({ text, apiKey, model, fetchImpl } = {}) {
+  // Sanitize before sending upstream — strip control / zero-width chars
+  // for the same reasons synthesize does (consistency + some providers'
+  // moderation can be confused by exotic Unicode).
+  const safeText = sanitizeUntrusted(text);
+
+  // Test seam: HARNESS_EMBED_STUB_RESPONSE returns a fixed vector instead
+  // of calling Gemini. Used only by smoke tests; documented here as
+  // test-only. The same caveat applies as synthesize's stub: no
+  // production code path sets it.
+  //
+  // Three accepted shapes:
+  //   JSON array of numbers              — same fixed vector for every input
+  //   {"deterministic": true}            — vector hashed from text bytes
+  //                                        (similar input → similar vector
+  //                                         only if bytes overlap; useful
+  //                                         for "blend doesn't break" tests)
+  //   {"map": {<substring>: [vec], ...}} — input matched against the FIRST
+  //                                        substring that appears in it,
+  //                                        returns that vector. Lets a
+  //                                        test wire up controlled cosine
+  //                                        relationships across inputs
+  //                                        with no shared text (used for
+  //                                        the "pure semantic match"
+  //                                        regression test on PR #7).
+  const stub = process.env.HARNESS_EMBED_STUB_RESPONSE;
+  if (stub) {
+    try {
+      const parsed = JSON.parse(stub);
+      if (
+        Array.isArray(parsed) &&
+        parsed.every((v) => typeof v === 'number')
+      ) {
+        return parsed;
+      }
+      if (parsed && parsed.deterministic === true) {
+        return deterministicVectorFromText(safeText);
+      }
+      if (parsed && parsed.map && typeof parsed.map === 'object') {
+        const lower = safeText.toLowerCase();
+        for (const [needle, vec] of Object.entries(parsed.map)) {
+          if (
+            lower.includes(needle.toLowerCase()) &&
+            Array.isArray(vec) &&
+            vec.every((v) => typeof v === 'number')
+          ) {
+            return vec;
+          }
+        }
+        if (Array.isArray(parsed.fallback)) return parsed.fallback;
+        // No matching substring and no fallback — return a zero vector of
+        // the same length as the first mapped vector so cosine similarity
+        // is well-defined (denom > 0 only if both inputs match a needle).
+        const firstVec = Object.values(parsed.map)[0];
+        if (Array.isArray(firstVec)) return firstVec.map(() => 0);
+      }
+    } catch {
+      // fall through to throwing below
+    }
+    throw new Error(
+      'HARNESS_EMBED_STUB_RESPONSE must be a JSON array of numbers, {"deterministic":true}, or {"map":{...}}.'
+    );
+  }
+
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY required for embedding calls.');
+  }
+  return callGeminiEmbedDefault({
+    text: safeText,
+    apiKey,
+    model: model || DEFAULT_EMBEDDING_MODEL,
+    fetchImpl,
+  });
+}
+
+// Deterministic per-text vector for the stub path. Hashes the text and
+// uses the digest bytes as a 32-dim float vector, normalized to unit
+// length. Stable across runs for a given text, so tests can assert
+// cosine similarity behaviors without coupling to a real model.
+export function deterministicVectorFromText(text) {
+  const digest = crypto.createHash('sha256').update(String(text)).digest();
+  // 32-dim vector — uses every byte of the SHA-256 digest exactly once.
+  // Bigger dimension would force us to either hash twice or pad with
+  // repeated bytes, both of which dilute the per-byte information; 32 is
+  // the natural ceiling here. Real embeddings are 768-dim, so this is
+  // only ever used for tests where dimension count doesn't matter as long
+  // as both sides of a cosine comparison agree.
+  const dim = 32;
+  const vec = new Array(dim);
+  for (let i = 0; i < dim; i++) {
+    // Map each byte to [-0.5, 0.5]; gives texts with overlapping prefixes
+    // and overlapping content correlated (but not equal) vectors.
+    vec[i] = (digest[i % digest.length] / 255) - 0.5;
+  }
+  // Normalize to unit length so cosine similarity is well-defined.
+  const norm = Math.sqrt(vec.reduce((acc, v) => acc + v * v, 0)) || 1;
+  return vec.map((v) => v / norm);
+}
+
+export function cosineSimilarity(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) {
+    throw new Error('cosineSimilarity expects two number arrays');
+  }
+  if (a.length !== b.length) {
+    throw new Error(
+      `cosineSimilarity vectors must be same length (got ${a.length} vs ${b.length})`
+    );
+  }
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  if (denom === 0) return 0;
+  return dot / denom;
+}

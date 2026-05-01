@@ -1,13 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
-import yaml from 'js-yaml';
 import {
   buildContext,
   detectStack,
   planFiles,
   readTemplate,
 } from '../lib/template.js';
+import { loadHarnessConfig } from '../lib/config.js';
 
 // Canonical reviewer personas — the 7 angle reviewers that the harness ships
 // with by default. Specialized-personas repos (council.specialized: true in
@@ -26,29 +26,30 @@ const CANONICAL_REVIEWER_PERSONAS = new Set([
 ]);
 
 function isSpecializedMode(cwd) {
-  const cfg = path.join(cwd, 'harness.yml');
-  if (!fs.existsSync(cfg)) return false;
-  // Use js-yaml. The previous hand-rolled regex parser had two real bugs
-  // caught by council R1 PR #4: (1) ReDoS susceptibility via NFA ambiguity
-  // in `(?:[ \t]+.+\n?)+` (`.+` overlaps `[ \t]+`); (2) only literal `true`
-  // matched — yaml.load handles all valid boolean variants (True / yes / on).
-  let parsed;
-  try {
-    parsed = yaml.load(fs.readFileSync(cfg, 'utf8'));
-  } catch (e) {
+  const cfg = loadHarnessConfig(cwd);
+  if (!cfg.exists) return false;
+  if (!cfg.ok) {
     // Bugs reviewer R2 PR #4: malformed harness.yml should be a fatal
     // error in `harness check`, not silent fallback to default behavior.
     // Otherwise a typo causes drift-check to start reporting canonical
     // personas as missing with no indication the config is the problem.
     console.error(
-      chalk.red(`harness.yml could not be parsed: ${e.message}`)
+      chalk.red(`harness.yml could not be parsed: ${cfg.error.message}`)
     );
     console.error(
-      chalk.dim(`  Path: ${cfg}\n  Fix the YAML syntax error and re-run.`)
+      chalk.dim(
+        `  Path: ${path.join(cwd, 'harness.yml')}\n  Fix the YAML syntax error and re-run.`
+      )
     );
+    // Exit 2 = config / runtime error, consistent with synthesize's
+    // EXIT_CONFIG_OR_RUNTIME_ERROR and reindex. Shell scripts can branch
+    // on `case $? in 0) … 1) … 2) …` to distinguish clean success (0),
+    // caller-input mistake (1), and config / setup failure (2).
     process.exit(2);
   }
-  return parsed && parsed.council && parsed.council.specialized === true;
+  return (
+    cfg.parsed && cfg.parsed.council && cfg.parsed.council.specialized === true
+  );
 }
 
 // Read-only drift report. Compares each canonical template file against the
