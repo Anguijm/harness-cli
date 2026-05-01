@@ -34,6 +34,15 @@ commands:
   typecheck: npm run typecheck
   test: npm test
 
+# Recall — vector retrieval blend settings (`harness recall`, `harness reindex`).
+# When .harness/embeddings.json exists and is fresh, `harness recall` adds
+# a cosine-similarity term to its score. Without an index (or with --no-vector)
+# recall stays at today's keyword × recency behavior.
+recall:
+  embedding_model: text-embedding-004   # 768-dim Gemini embeddings; cheap, fast.
+  vector_weight: 0.5                    # Vector contribution scaled by max_keyword_score
+                                        # so 0.5 reads as "half a top keyword hit."
+
 # Synthesis page generation — `harness synthesize` settings.
 # When .harness/failures.jsonl accumulates ≥ min_cluster_size failures sharing
 # `failure_class | sensor_involved | guide_gap`, `harness synthesize --apply`

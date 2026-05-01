@@ -10,6 +10,7 @@ import { review } from './commands/review.js';
 import { recipe } from './commands/recipe.js';
 import { learn } from './commands/learn.js';
 import { synthesize } from './commands/synthesize.js';
+import { reindex } from './commands/reindex.js';
 import chalk from 'chalk';
 
 const program = new Command();
@@ -45,10 +46,19 @@ program
 
 program
   .command('recall <query>')
-  .description('Surface past entries from .harness/ memory (learnings, failures, council reports) ranked by keyword density × recency')
+  .description('Surface past entries from .harness/ memory ranked by keyword × recency × (optional) vector similarity')
   .option('-l, --limit <n>', 'Max results (default 5)', (v) => parseInt(v, 10), 5)
   .option('-s, --source <path...>', 'Override default sources (repeatable)')
+  .option('--no-vector', 'Skip the vector blend even if .harness/embeddings.json exists')
   .action(recall);
+
+program
+  .command('reindex')
+  .description('Build / refresh .harness/embeddings.json so harness recall can blend semantic similarity with keyword × recency')
+  .option('--full', 'Discard existing index and re-embed everything')
+  .option('--dry-run', 'Report what would change without calling the embedding API')
+  .option('-m, --model <name>', 'Override the embedding model (default text-embedding-004)')
+  .action(reindex);
 
 program
   .command('lint')

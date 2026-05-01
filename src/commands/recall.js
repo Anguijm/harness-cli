@@ -1,28 +1,36 @@
-import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
 import yaml from 'js-yaml';
 import { findChunkBySlug, extractLinks } from '../lib/links.js';
+import {
+  loadSources,
+  loadConfiguredSources,
+} from '../lib/recall_corpus.js';
+import {
+  loadIndex,
+  chunkContentHash,
+  cosineSimilarity,
+  embed,
+} from '../lib/embeddings.js';
+import fs from 'fs';
 
 // Queryable memory retrieval. Surfaces past entries from learnings.md,
 // yolo_log.jsonl, last_council.md, failures.jsonl etc. that match the
-// query, ranked by keyword density × recency.
+// query, ranked by keyword density × recency × (optional) vector similarity.
 //
 // Anti-pattern this prevents: institutional knowledge accumulating in
 // .harness/ that humans have written but never read again. Pair with
 // `harness map` (which grounds plans in code) to ground plans in past
 // lessons too.
-
-const DEFAULT_SOURCES = [
-  '.harness/learnings.md',
-  '.harness/failures.jsonl',
-  '.harness/yolo_log.jsonl',
-  '.harness/last_council.md',
-];
-
-// Dates in chunk headers like "## 2026-04-29 — session label" or
-// "ts: 2026-04-30T12:34:56Z" inside JSONL entries.
-const DATE_RE = /\b(\d{4}-\d{2}-\d{2})(?:[T ]\d{2}:\d{2}(?::\d{2})?)?/;
+//
+// Vector blend (priority #6): if .harness/embeddings.json exists and is
+// fresh for the current corpus, recall embeds the query, computes cosine
+// similarity against every chunk's stored vector, and blends the result
+// with the keyword × recency score. The blend surfaces semantic matches
+// that share no literal tokens with the query (e.g., "council kept
+// hallucinating accessibility rules" finding a chunk titled "a11y
+// persona invented i18n requirements"). Falls back to keyword-only
+// behavior when no index exists, when it's stale, or with --no-vector.
 
 // Common stop words — don't let them dominate the keyword score.
 const STOP = new Set([
@@ -32,9 +40,6 @@ const STOP = new Set([
   'what', 'why', 'who', 'do', 'does', 'should', 'would', 'could',
 ]);
 
-// Wiki-style cross-references and slug resolution are in src/lib/links.js
-// (shared with harness lint).
-//
 // Score multiplier for chunks reached via [[link]]: 0.5. Heuristic chosen
 // to keep linked context relevant but subordinate to direct matches.
 // Increasing toward 1.0 lets linked items displace more relevant direct
@@ -42,58 +47,18 @@ const STOP = new Set([
 // also exist. (Documented per maintainability remediation, PR #3 R1.)
 const LINKED_SCORE_MULTIPLIER = 0.5;
 
+// Vector contribution weight in the final blend. The vector contribution
+// is rescaled by max_keyword_score before adding, so a weight of 0.5
+// reads as "half the influence of the top keyword match." Larger values
+// let semantic matches outrank exact-keyword hits, which is rarely what
+// the user wants on a small corpus; 0.5 is the documented default and
+// per-repo override flows through harness.yml `recall.vector_weight`.
+const DEFAULT_VECTOR_WEIGHT = 0.5;
+
 function tokenize(s) {
   return (s.toLowerCase().match(/[a-z][a-z0-9_-]+/g) || []).filter(
     (w) => w.length > 2 && !STOP.has(w)
   );
-}
-
-function chunkMarkdown(content, sourcePath) {
-  // Split on H2 (## ...) headings. Each chunk = heading + body until next H2.
-  const lines = content.split('\n');
-  const chunks = [];
-  let current = null;
-  for (const line of lines) {
-    if (/^##\s+(?!#)/.test(line)) {
-      if (current) chunks.push(current);
-      current = { header: line, body: [], source: sourcePath };
-    } else if (current) {
-      current.body.push(line);
-    }
-  }
-  if (current) chunks.push(current);
-  // If no H2 headings at all, treat the whole file as one chunk.
-  if (chunks.length === 0) {
-    chunks.push({ header: '', body: lines, source: sourcePath });
-  }
-  return chunks.map((c) => ({
-    text: (c.header + '\n' + c.body.join('\n')).trim(),
-    source: c.source,
-    date: extractDate(c.header) || extractDate(c.body.join('\n')),
-  }));
-}
-
-function chunkJsonl(content, sourcePath) {
-  // Each line is its own chunk.
-  return content
-    .split('\n')
-    .filter((l) => l.trim().length > 0)
-    .map((line) => {
-      let date = null;
-      try {
-        const obj = JSON.parse(line);
-        date = obj.ts || obj.timestamp || obj.date || null;
-      } catch {
-        // not JSON — fall back to regex
-      }
-      if (!date) date = extractDate(line);
-      return { text: line, source: sourcePath, date };
-    });
-}
-
-function extractDate(s) {
-  const m = s && s.match(DATE_RE);
-  return m ? m[1] : null;
 }
 
 function recencyWeight(dateStr) {
@@ -125,45 +90,26 @@ function score(chunk, queryTokens) {
   return raw * (1 + uniqueMatches) * lengthPenalty * recencyWeight(chunk.date);
 }
 
-function loadSources(cwd, sources) {
-  const chunks = [];
-  for (const rel of sources) {
-    const abs = path.isAbsolute(rel) ? rel : path.join(cwd, rel);
-    if (!fs.existsSync(abs)) continue;
-    const content = fs.readFileSync(abs, 'utf8');
-    if (rel.endsWith('.jsonl')) {
-      chunks.push(...chunkJsonl(content, rel));
-    } else {
-      chunks.push(...chunkMarkdown(content, rel));
-    }
-  }
-  return chunks;
-}
-
-function loadConfiguredSources(cwd) {
-  // Read harness.yml for a `recall.sources` list, if present.
-  // js-yaml replaces a hand-rolled regex parser that had ReDoS susceptibility
-  // (caught alongside the same defect in check.js by council R1 PR #4).
+function loadVectorConfig(cwd) {
+  // recall.vector_weight from harness.yml — used to scale the vector
+  // contribution in the blend. Defaults to DEFAULT_VECTOR_WEIGHT when
+  // unset; falls back silently if harness.yml is unparseable (loadConfiguredSources
+  // already warns on the same parse failure for the sources list).
   const cfg = path.join(cwd, 'harness.yml');
-  if (!fs.existsSync(cfg)) return DEFAULT_SOURCES;
+  if (!fs.existsSync(cfg)) return { weight: DEFAULT_VECTOR_WEIGHT };
   let parsed;
   try {
     parsed = yaml.load(fs.readFileSync(cfg, 'utf8'));
-  } catch (e) {
-    // Bugs reviewer R2 PR #4: don't silently fall back to defaults when
-    // harness.yml is unparseable — the user's `recall.sources` config is
-    // being ignored, and they should know. recall is a read-only command,
-    // so warn loudly but don't abort (defaults still produce useful output).
-    console.error(
-      chalk.yellow(
-        `harness.yml could not be parsed (${e.message.split('\n')[0]}); falling back to default recall sources.`
-      )
-    );
-    return DEFAULT_SOURCES;
+  } catch {
+    return { weight: DEFAULT_VECTOR_WEIGHT };
   }
-  const sources = parsed && parsed.recall && parsed.recall.sources;
-  if (!Array.isArray(sources) || sources.length === 0) return DEFAULT_SOURCES;
-  return sources;
+  const recall = parsed && parsed.recall;
+  if (!recall) return { weight: DEFAULT_VECTOR_WEIGHT };
+  const w = recall.vector_weight;
+  if (typeof w === 'number' && w >= 0 && w <= 5) {
+    return { weight: w };
+  }
+  return { weight: DEFAULT_VECTOR_WEIGHT };
 }
 
 function formatExcerpt(chunk, maxLines = 12) {
@@ -195,8 +141,86 @@ export async function recall(query, options) {
     process.exit(0);
   }
 
-  const scored = chunks
-    .map((c) => ({ chunk: c, score: score(c, queryTokens), via: null }))
+  // === Vector blend (priority #6) ===
+  // Try to load .harness/embeddings.json. If present and every chunk in
+  // the current corpus is hashed in the index, embed the query and add a
+  // cosine-similarity component to each chunk's score. If the index is
+  // missing, partial, or the user passed --no-vector, fall back to
+  // keyword-only behavior (recall stays useful without an index).
+  const useVector = options.vector !== false;
+  let vectorScores = null;
+  if (useVector) {
+    const index = loadIndex(cwd);
+    if (index && index.entries) {
+      const allHashed = chunks.every((c) =>
+        Object.prototype.hasOwnProperty.call(
+          index.entries,
+          chunkContentHash(c.text)
+        )
+      );
+      if (!allHashed) {
+        console.error(
+          chalk.dim(
+            'recall: vector index is stale — some chunks are unhashed; run `harness reindex` for full semantic blend. Proceeding with keyword-only.'
+          )
+        );
+      } else {
+        try {
+          const queryVec = await embed({
+            text: query,
+            apiKey: process.env.GEMINI_API_KEY,
+            model: index.model,
+          });
+          const cfg = loadVectorConfig(cwd);
+          vectorScores = new Map();
+          for (const c of chunks) {
+            const entry = index.entries[chunkContentHash(c.text)];
+            if (!entry || !Array.isArray(entry.vector)) continue;
+            const sim = cosineSimilarity(queryVec, entry.vector);
+            vectorScores.set(c.text, { sim, weight: cfg.weight });
+          }
+        } catch (e) {
+          // Fail-soft on the query-embed path: recall should never break
+          // if the API hiccups. Tell the user, then continue keyword-only.
+          console.error(
+            chalk.dim(
+              `recall: query embedding failed (${e.message}). Proceeding with keyword-only.`
+            )
+          );
+          vectorScores = null;
+        }
+      }
+    }
+  }
+
+  const keywordScored = chunks.map((c) => ({
+    chunk: c,
+    keywordScore: score(c, queryTokens),
+    via: null,
+  }));
+  const maxKeyword = keywordScored.reduce(
+    (m, x) => Math.max(m, x.keywordScore),
+    0
+  );
+  // Blend: keyword score + (cosine × weight × max_keyword_score). Scaling
+  // the vector contribution by max_keyword puts both terms on the same
+  // numeric scale, so vector_weight reads as "fraction of a top keyword
+  // hit." Without scaling, raw cosine values (0–1) would always be
+  // dwarfed by keyword scores that climb into the tens.
+  const scored = keywordScored
+    .map((x) => {
+      let total = x.keywordScore;
+      if (vectorScores && maxKeyword > 0) {
+        const v = vectorScores.get(x.chunk.text);
+        if (v) total += Math.max(0, v.sim) * v.weight * maxKeyword;
+      } else if (vectorScores && maxKeyword === 0) {
+        // No keyword hits at all — fall back to raw cosine on a [0,1]
+        // scale so semantically-relevant chunks can still surface.
+        const v = vectorScores.get(x.chunk.text);
+        if (v) total = Math.max(0, v.sim);
+      }
+      return { chunk: x.chunk, score: total, via: null };
+    })
     .filter((x) => x.score > 0);
 
   // Follow [[wiki-style]] cross-references one hop deep. Linked chunks

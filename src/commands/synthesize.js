@@ -27,6 +27,10 @@ import {
   findDuplicateSignalClusters,
   DUPLICATE_SIGNAL_THRESHOLD,
 } from '../lib/failures.js';
+import {
+  sanitizeUntrusted,
+  FAILURE_RECORD_CLOSING_TAG,
+} from '../lib/sanitize.js';
 
 // Cheaper / faster Gemini variant — synthesis is short and stateless and
 // doesn't need pro-tier reasoning. Override per repo via harness.yml
@@ -81,36 +85,8 @@ CONTRIBUTING_FAILURES:
 - ...
 `;
 
-// Every untrusted-data wrapper closing tag we use anywhere in synthesis
-// prompts. sanitizeUntrusted escapes ALL of these inside any captured
-// payload so a crafted failure record or learnings excerpt can't smuggle
-// in a closing tag and break out of whichever block it lives in. Codex
-// caught the original implementation only escaping the failure-record
-// tag; learnings excerpts had the same hole.
-const UNTRUSTED_CLOSING_TAGS = [
-  '</UNTRUSTED_FAILURE_RECORD>',
-  '</UNTRUSTED_LEARNINGS_EXCERPTS>',
-];
-const FAILURE_RECORD_CLOSING_TAG = UNTRUSTED_CLOSING_TAGS[0];
-
-function escapeClosingTag(tag) {
-  return tag.replace('</', '<\\/');
-}
-
-function sanitizeUntrusted(text) {
-  if (text === null || text === undefined) return '';
-  let s = String(text)
-    // Strip ASCII control chars (except \t \n \r) and Unicode zero-width /
-    // bidi-override chars that could visually break out of a tag.
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2060-\u2069]/g, '')
-    // Cap any run of newlines at two: long blank runs make it easier for
-    // the model to be visually fooled into thinking a tag closed.
-    .replace(/\n{3,}/g, '\n\n');
-  for (const tag of UNTRUSTED_CLOSING_TAGS) {
-    s = s.replace(new RegExp(tag, 'g'), escapeClosingTag(tag));
-  }
-  return s;
-}
+// Tag wrappers and sanitizer live in src/lib/sanitize.js so the embedding
+// path (harness reindex) gets the same hardening.
 
 function wrapFailureRecord(failure) {
   const safe = sanitizeUntrusted(JSON.stringify(failure.parsed, null, 2));

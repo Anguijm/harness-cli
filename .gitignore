@@ -4,6 +4,8 @@ __pycache__/
 .harness/last_council.md
 .harness/session_state.json
 .harness/yolo_log.jsonl
+.harness/embeddings.json
+.harness/.learnings.synthesize.lock
 .budget/
 *.log
 *.pyc
