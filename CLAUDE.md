@@ -96,6 +96,8 @@ Never edit prior entries in either file; both are append-only.
 
 **Before planning anything new, run `harness recall "<topic>"`** to see what past failures and learnings on that surface have already been recorded. Cheap, prevents re-learning.
 
+**Cross-reference between entries with `[[wiki-style]]` links.** When a `learnings.md` entry relates to another (a follow-up, a contradiction, a successor pattern), reference it as `[[short-slug-of-target-section-header]]`. The link resolves by slug-normalizing the target's header text (date prefix stripped). `harness recall` follows links one hop deep at half score, so linked context surfaces alongside direct matches — the same pattern Karpathy's LLM Wiki uses to keep the corpus interlinked rather than a stack of disconnected entries. Example: an entry on "council drift on roadtripper" might link to `[[a11y i18n hallucination]]` if both turned out to be the same guide-gap class. `harness lint` flags links that don't resolve.
+
 **Periodically run `harness lint`** to keep the memory artifacts honest. Lint finds: stale file references (paths that no longer exist), orphan failure records (no `fix_sha`), schema violations in `failures.jsonl`, empty section blocks (template skeletons left unfilled), future-dated headers, and duplicate-signal clusters (≥3 failures with the same `failure_class | sensor_involved | guide_gap` — these usually indicate a synthesis page is needed in `learnings.md`). Run before a session-close ritual; auto-fixable issues clear with `--fix`. Without periodic lint, the memory corpus accumulates noise faster than signal — Karpathy's LLM Wiki failure mode.
 
 ## Backport rule — fixes to harness files flow upstream

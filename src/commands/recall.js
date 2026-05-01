@@ -30,6 +30,48 @@ const STOP = new Set([
   'what', 'why', 'who', 'do', 'does', 'should', 'would', 'could',
 ]);
 
+// Wiki-style cross-references: [[some text]] points at another section
+// in learnings.md. Resolution is by slug-normalized header match (date
+// prefix stripped). Recall follows links one hop deep at half score so
+// linked context surfaces alongside direct matches.
+const LINK_RE = /\[\[([^\]]+)\]\]/g;
+
+function normalizeSlug(s) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function chunkHeaderSlug(chunk) {
+  if (!chunk.text) return '';
+  const firstLine = chunk.text.split('\n')[0] || '';
+  const stripped = firstLine
+    .replace(/^##\s+/, '')
+    .replace(/^\d{4}-\d{2}-\d{2}\s*[—–-]?\s*/, '');
+  return normalizeSlug(stripped);
+}
+
+function findChunkBySlug(chunks, linkText) {
+  const targetSlug = normalizeSlug(linkText);
+  if (!targetSlug) return null;
+  for (const chunk of chunks) {
+    if (chunkHeaderSlug(chunk) === targetSlug) return chunk;
+  }
+  for (const chunk of chunks) {
+    const slug = chunkHeaderSlug(chunk);
+    if (slug.startsWith(targetSlug) || targetSlug.startsWith(slug)) return chunk;
+  }
+  return null;
+}
+
+function extractLinks(text) {
+  const links = [];
+  let m;
+  LINK_RE.lastIndex = 0;
+  while ((m = LINK_RE.exec(text)) !== null) {
+    links.push(m[1].trim());
+  }
+  return links;
+}
+
 function tokenize(s) {
   return (s.toLowerCase().match(/[a-z][a-z0-9_-]+/g) || []).filter(
     (w) => w.length > 2 && !STOP.has(w)
@@ -175,12 +217,29 @@ export async function recall(query, options) {
   }
 
   const scored = chunks
-    .map((c) => ({ chunk: c, score: score(c, queryTokens) }))
+    .map((c) => ({ chunk: c, score: score(c, queryTokens), via: null }))
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score);
 
   const limit = options.limit || 5;
-  const top = scored.slice(0, limit);
+  const directHits = scored.slice(0, limit);
+
+  // Follow [[wiki-style]] cross-references one hop deep at half score —
+  // linked context surfaces alongside direct matches without dominating.
+  const seen = new Set(directHits.map((h) => h.chunk.text));
+  const linked = [];
+  for (const hit of directHits) {
+    const links = extractLinks(hit.chunk.text);
+    for (const linkText of links) {
+      const target = findChunkBySlug(chunks, linkText);
+      if (!target) continue;
+      if (seen.has(target.text)) continue;
+      seen.add(target.text);
+      linked.push({ chunk: target, score: hit.score * 0.5, via: linkText });
+    }
+  }
+
+  const top = [...directHits, ...linked].slice(0, limit + linked.length);
 
   if (top.length === 0) {
     console.log(chalk.dim(`No matches in ${chunks.length} chunks across ${sources.length} sources.`));
@@ -188,13 +247,14 @@ export async function recall(query, options) {
   }
 
   console.log(`# Recall: "${query}"`);
-  console.log(`_${top.length} of ${scored.length} matching chunks (scanned ${chunks.length} total) — ranked by keyword × recency_`);
+  console.log(`_${directHits.length} direct match${directHits.length === 1 ? '' : 'es'}, ${linked.length} linked from those (scanned ${chunks.length} chunks total)_`);
   console.log();
 
-  for (const { chunk, score } of top) {
+  for (const { chunk, score, via } of top) {
     const dateLabel = chunk.date ? ` — ${chunk.date}` : '';
+    const viaLabel = via ? `  _(linked via [[${via}]])_` : '';
     console.log(`---`);
-    console.log(`**Source:** \`${chunk.source}\`${dateLabel}  _(score ${score.toFixed(2)})_`);
+    console.log(`**Source:** \`${chunk.source}\`${dateLabel}  _(score ${score.toFixed(2)})_${viaLabel}`);
     console.log();
     console.log(formatExcerpt(chunk));
     console.log();
