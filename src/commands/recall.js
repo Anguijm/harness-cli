@@ -1,7 +1,7 @@
 import path from 'path';
 import chalk from 'chalk';
-import yaml from 'js-yaml';
 import { findChunkBySlug, extractLinks } from '../lib/links.js';
+import { loadHarnessConfig } from '../lib/config.js';
 import {
   loadSources,
   loadConfiguredSources,
@@ -93,19 +93,19 @@ function score(chunk, queryTokens) {
 function loadVectorConfig(cwd) {
   // recall.vector_weight from harness.yml — used to scale the vector
   // contribution in the blend. Defaults to DEFAULT_VECTOR_WEIGHT when
-  // unset; falls back silently if harness.yml is unparseable (loadConfiguredSources
-  // already warns on the same parse failure for the sources list).
-  const cfg = path.join(cwd, 'harness.yml');
-  if (!fs.existsSync(cfg)) return { weight: DEFAULT_VECTOR_WEIGHT };
-  let parsed;
-  try {
-    parsed = yaml.load(fs.readFileSync(cfg, 'utf8'));
-  } catch {
-    return { weight: DEFAULT_VECTOR_WEIGHT };
-  }
-  const recall = parsed && parsed.recall;
+  // unset; falls back silently if harness.yml is unparseable
+  // (loadConfiguredSources already warns on the same parse failure for
+  // the sources list, so we don't double-warn).
+  const cfg = loadHarnessConfig(cwd);
+  if (!cfg.ok) return { weight: DEFAULT_VECTOR_WEIGHT };
+  const recall = cfg.parsed && cfg.parsed.recall;
   if (!recall) return { weight: DEFAULT_VECTOR_WEIGHT };
   const w = recall.vector_weight;
+  // Cap at 5: weights > 1.0 already let semantic matches outrank exact
+  // keyword hits and are rarely what the user wants on a small corpus.
+  // A multi-digit weight (e.g. typing "50" instead of "0.5") is almost
+  // certainly a configuration error, so we silently fall back to default
+  // rather than letting it nuke the keyword scorer's contribution.
   if (typeof w === 'number' && w >= 0 && w <= 5) {
     return { weight: w };
   }
@@ -159,8 +159,11 @@ export async function recall(query, options) {
         )
       );
       if (!allHashed) {
+        // chalk.yellow (not dim) so users notice the semantic search is
+        // degraded — silent fallback was a usability hazard called out
+        // by the bugs reviewer on PR #7 R1.
         console.error(
-          chalk.dim(
+          chalk.yellow(
             'recall: vector index is stale — some chunks are unhashed; run `harness reindex` for full semantic blend. Proceeding with keyword-only.'
           )
         );
@@ -181,9 +184,11 @@ export async function recall(query, options) {
           }
         } catch (e) {
           // Fail-soft on the query-embed path: recall should never break
-          // if the API hiccups. Tell the user, then continue keyword-only.
+          // if the API hiccups. Tell the user (chalk.yellow, not dim, so
+          // they notice the semantic step degraded), then continue
+          // keyword-only.
           console.error(
-            chalk.dim(
+            chalk.yellow(
               `recall: query embedding failed (${e.message}). Proceeding with keyword-only.`
             )
           );

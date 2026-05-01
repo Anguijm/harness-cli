@@ -8,8 +8,8 @@
 
 import fs from 'fs';
 import path from 'path';
-import yaml from 'js-yaml';
 import chalk from 'chalk';
+import { loadHarnessConfig } from './config.js';
 
 export const DEFAULT_SOURCES = [
   '.harness/learnings.md',
@@ -86,26 +86,20 @@ export function loadSources(cwd, sources) {
 
 export function loadConfiguredSources(cwd) {
   // Read harness.yml for a `recall.sources` list, if present.
-  // js-yaml replaces a hand-rolled regex parser that had ReDoS susceptibility
-  // (caught alongside the same defect in check.js by council R1 PR #4).
-  const cfg = path.join(cwd, 'harness.yml');
-  if (!fs.existsSync(cfg)) return DEFAULT_SOURCES;
-  let parsed;
-  try {
-    parsed = yaml.load(fs.readFileSync(cfg, 'utf8'));
-  } catch (e) {
-    // Bugs reviewer R2 PR #4: don't silently fall back to defaults when
-    // harness.yml is unparseable — the user's `recall.sources` config is
-    // being ignored, and they should know. recall is a read-only command,
-    // so warn loudly but don't abort (defaults still produce useful output).
+  // Bugs reviewer R2 PR #4: don't silently fall back to defaults when
+  // harness.yml is unparseable — the user's `recall.sources` config is
+  // being ignored, and they should know. recall is a read-only command,
+  // so warn loudly but don't abort (defaults still produce useful output).
+  const cfg = loadHarnessConfig(cwd);
+  if (!cfg.ok) {
     console.error(
       chalk.yellow(
-        `harness.yml could not be parsed (${e.message.split('\n')[0]}); falling back to default recall sources.`
+        `harness.yml could not be parsed (${cfg.error.message.split('\n')[0]}); falling back to default recall sources.`
       )
     );
     return DEFAULT_SOURCES;
   }
-  const sources = parsed && parsed.recall && parsed.recall.sources;
+  const sources = cfg.parsed && cfg.parsed.recall && cfg.parsed.recall.sources;
   if (!Array.isArray(sources) || sources.length === 0) return DEFAULT_SOURCES;
   return sources;
 }

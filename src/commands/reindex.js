@@ -12,7 +12,6 @@
 
 import path from 'path';
 import chalk from 'chalk';
-import yaml from 'js-yaml';
 import fs from 'fs';
 import {
   loadSources,
@@ -27,20 +26,21 @@ import {
   DEFAULT_EMBEDDING_MODEL,
   EXIT_CONFIG_OR_RUNTIME_ERROR,
 } from '../lib/embeddings.js';
+import { loadHarnessConfig } from '../lib/config.js';
+
+// Progress reporting cadence during a large reindex — prints a status
+// line every Nth embed so the operator sees the run isn't stalled. 10 is
+// a balance: too low spams the console; too high lets a stalled-but-
+// running embed look frozen for minutes.
+const PROGRESS_REPORT_EVERY = 10;
 
 function loadEmbeddingModel(cwd) {
   // recall.embedding_model from harness.yml, falls back to library default.
   // Falls back silently on parse failure (loadConfiguredSources already
   // emits a warning on the same condition for the sources list).
-  const cfg = path.join(cwd, 'harness.yml');
-  if (!fs.existsSync(cfg)) return DEFAULT_EMBEDDING_MODEL;
-  let parsed;
-  try {
-    parsed = yaml.load(fs.readFileSync(cfg, 'utf8'));
-  } catch {
-    return DEFAULT_EMBEDDING_MODEL;
-  }
-  const m = parsed && parsed.recall && parsed.recall.embedding_model;
+  const cfg = loadHarnessConfig(cwd);
+  if (!cfg.ok) return DEFAULT_EMBEDDING_MODEL;
+  const m = cfg.parsed && cfg.parsed.recall && cfg.parsed.recall.embedding_model;
   return typeof m === 'string' && m.length > 0 ? m : DEFAULT_EMBEDDING_MODEL;
 }
 
@@ -121,9 +121,13 @@ export async function reindex(options) {
     process.exit(0);
   }
 
+  // Codex P2 PR #7: only require an API key when we'd actually call the
+  // embedding API. A prune-only run (toEmbed === 0, droppedHashes > 0)
+  // just rewrites the index to drop stale hashes — no upstream call
+  // needed and bailing here would leave the cleanup undone.
   const apiKey = process.env.GEMINI_API_KEY;
   const stub = process.env.HARNESS_EMBED_STUB_RESPONSE;
-  if (!apiKey && !stub) {
+  if (toEmbed.length > 0 && !apiKey && !stub) {
     console.error(
       chalk.red(
         'GEMINI_API_KEY not set. `harness reindex` requires it (or HARNESS_EMBED_STUB_RESPONSE for tests).'
@@ -132,40 +136,92 @@ export async function reindex(options) {
     process.exit(EXIT_CONFIG_OR_RUNTIME_ERROR);
   }
 
-  let embedded = 0;
-  for (const { chunk, hash } of toEmbed) {
-    let vector;
-    try {
-      vector = await embed({ text: chunk.text, apiKey, model });
-    } catch (e) {
+  // Exclusive lock around the read-modify-write on .harness/embeddings.json.
+  // Without this, two concurrent `reindex` runs can race on the write and
+  // last-writer-wins silently destroys the other's embeddings — same
+  // failure mode the synthesize lock guards against on learnings.md.
+  // Bugs reviewer R1 PR #7 flagged this. `wx` is atomic
+  // create-if-not-exists; failure means another run holds the lock or a
+  // previous run crashed before releasing.
+  const lockPath = path.join(cwd, '.harness/.reindex.lock');
+  let lockFd;
+  try {
+    fs.mkdirSync(path.join(cwd, '.harness'), { recursive: true });
+    lockFd = fs.openSync(lockPath, 'wx');
+    fs.writeSync(
+      lockFd,
+      `pid ${process.pid} acquired ${new Date().toISOString()}\n`
+    );
+  } catch (e) {
+    if (e.code === 'EEXIST') {
       console.error(
         chalk.red(
-          `Embedding failed for chunk in ${chunk.source} (${e.message}). Halting; ${embedded} chunk(s) saved so far.`
+          `Another harness reindex appears to be running (lock file exists at ${path.relative(cwd, lockPath)}).`
         )
       );
-      // Save partial progress so the next run picks up where this one
-      // left off — incremental mode means every successful embed is
-      // worth keeping.
-      if (embedded > 0 || droppedHashes.length > 0) saveIndex(cwd, index);
+      console.error(
+        chalk.dim(
+          '  If no other run is in progress, the previous run crashed before releasing — delete the lock file and retry.'
+        )
+      );
       process.exit(EXIT_CONFIG_OR_RUNTIME_ERROR);
     }
-    index.entries[hash] = {
-      vector,
-      source: chunk.source,
-      date: chunk.date || null,
-    };
-    embedded += 1;
-    if (embedded % 10 === 0) {
-      console.log(chalk.dim(`  ... ${embedded}/${toEmbed.length} embedded`));
+    throw e;
+  }
+
+  let exitCode = 0;
+  let embedded = 0;
+  try {
+    for (const { chunk, hash } of toEmbed) {
+      let vector;
+      try {
+        vector = await embed({ text: chunk.text, apiKey, model });
+      } catch (e) {
+        console.error(
+          chalk.red(
+            `Embedding failed for chunk in ${chunk.source} (${e.message}). Halting; ${embedded} chunk(s) saved so far.`
+          )
+        );
+        // Save partial progress so the next run picks up where this one
+        // left off — incremental mode means every successful embed is
+        // worth keeping.
+        if (embedded > 0 || droppedHashes.length > 0) saveIndex(cwd, index);
+        exitCode = EXIT_CONFIG_OR_RUNTIME_ERROR;
+        break;
+      }
+      index.entries[hash] = {
+        vector,
+        source: chunk.source,
+        date: chunk.date || null,
+      };
+      embedded += 1;
+      if (embedded % PROGRESS_REPORT_EVERY === 0) {
+        console.log(chalk.dim(`  ... ${embedded}/${toEmbed.length} embedded`));
+      }
+    }
+
+    if (exitCode === 0) {
+      saveIndex(cwd, index);
+      console.log();
+      console.log(
+        chalk.bold(
+          `Wrote .harness/embeddings.json — ${Object.keys(index.entries).length} entr${Object.keys(index.entries).length === 1 ? 'y' : 'ies'}, ${embedded} freshly embedded.`
+        )
+      );
+    }
+  } finally {
+    try {
+      fs.closeSync(lockFd);
+    } catch {
+      // intentionally swallowed — releasing the lock is best-effort
+    }
+    try {
+      fs.unlinkSync(lockPath);
+    } catch {
+      // intentionally swallowed — releasing the lock is best-effort
     }
   }
 
-  saveIndex(cwd, index);
-  console.log();
-  console.log(
-    chalk.bold(
-      `Wrote .harness/embeddings.json — ${Object.keys(index.entries).length} entr${Object.keys(index.entries).length === 1 ? 'y' : 'ies'}, ${embedded} freshly embedded.`
-    )
-  );
+  if (exitCode !== 0) process.exit(exitCode);
   process.exit(0);
 }

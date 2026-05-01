@@ -20,7 +20,6 @@
 
 import fs from 'fs';
 import path from 'path';
-import yaml from 'js-yaml';
 import chalk from 'chalk';
 import {
   loadFailures,
@@ -31,6 +30,7 @@ import {
   sanitizeUntrusted,
   FAILURE_RECORD_CLOSING_TAG,
 } from '../lib/sanitize.js';
+import { loadHarnessConfig } from '../lib/config.js';
 
 // Cheaper / faster Gemini variant — synthesis is short and stateless and
 // doesn't need pro-tier reasoning. Override per repo via harness.yml
@@ -253,25 +253,21 @@ function existingSynthesisHashes(learningsContent) {
 }
 
 function loadConfigDefaults(cwd) {
-  const cfg = path.join(cwd, 'harness.yml');
   const out = {
     model: DEFAULT_MODEL,
     max: DEFAULT_MAX_CLUSTERS,
     threshold: DUPLICATE_SIGNAL_THRESHOLD,
   };
-  if (!fs.existsSync(cfg)) return out;
-  let parsed;
-  try {
-    parsed = yaml.load(fs.readFileSync(cfg, 'utf8'));
-  } catch (e) {
+  const cfg = loadHarnessConfig(cwd);
+  if (!cfg.ok) {
     console.error(
       chalk.yellow(
-        `harness.yml could not be parsed (${e.message.split('\n')[0]}); using built-in synthesize defaults.`
+        `harness.yml could not be parsed (${cfg.error.message.split('\n')[0]}); using built-in synthesize defaults.`
       )
     );
     return out;
   }
-  const block = parsed && parsed.synthesize;
+  const block = cfg.parsed && cfg.parsed.synthesize;
   if (!block || typeof block !== 'object') return out;
   if (typeof block.model === 'string') out.model = block.model;
   if (Number.isInteger(block.max) && block.max > 0) out.max = block.max;

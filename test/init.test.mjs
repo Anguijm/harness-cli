@@ -846,6 +846,75 @@ function expectFile(dir, rel) {
   }
 }
 
+// Test 23a: PURE semantic match — query has zero keyword overlap with the
+// target chunk; only the vector blend can surface it. Bugs reviewer R1 PR #7
+// flagged this as the missing core-value test. Uses the stub's "map" mode
+// to wire up controlled cosine relationships between unrelated text strings.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      [
+        '# Learnings',
+        '',
+        '## 2026-04-01 — wallaby observations',
+        'notes about marsupials and their habits',
+        '',
+        '## 2026-04-15 — dishwasher repair log',
+        'notes about kitchen appliance fixes',
+        '',
+      ].join('\n')
+    );
+    // Stub map: any text containing "wallaby" or "quokka" gets the same
+    // vector; "dishwasher" gets an orthogonal vector. Query "quokka" has
+    // ZERO keyword overlap with "wallaby observations", so keyword score
+    // is 0 for both chunks. Vector blend distinguishes them.
+    const stubMap = {
+      map: {
+        wallaby: [1, 0, 0, 0],
+        quokka: [1, 0, 0, 0],
+        dishwasher: [0, 0, 0, 1],
+      },
+    };
+    const env = {
+      ...process.env,
+      HARNESS_EMBED_STUB_RESPONSE: JSON.stringify(stubMap),
+    };
+    execSync(`node "${CLI}" reindex`, {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: 'pipe',
+      env,
+    });
+    const out = execSync(
+      `node "${CLI}" recall "quokka" --limit 2`,
+      { cwd: dir, encoding: 'utf8', stdio: 'pipe', env }
+    );
+    // Wallaby chunk must surface — it has zero shared tokens with "quokka"
+    // but the stub gives them an identical vector, proving the blend
+    // carries the result when keyword scoring returns 0.
+    assert(
+      out.includes('wallaby observations'),
+      `expected pure semantic match to surface wallaby chunk; got:\n${out}`
+    );
+    // The dishwasher chunk has an orthogonal vector AND no keyword
+    // overlap with "quokka" — it must NOT outrank wallaby.
+    const wallabyIdx = out.indexOf('wallaby observations');
+    const dishwasherIdx = out.indexOf('dishwasher repair log');
+    if (dishwasherIdx >= 0) {
+      assert(
+        wallabyIdx < dishwasherIdx,
+        `expected wallaby ranked above dishwasher; got wallaby@${wallabyIdx}, dishwasher@${dishwasherIdx}`
+      );
+    }
+    console.log('PASS: pure semantic match surfaces zero-keyword-overlap chunk');
+  } finally {
+    cleanup(dir);
+  }
+}
+
 // Test 23: harness reindex without GEMINI_API_KEY (or stub) fails loud.
 {
   const dir = makeTempRepo('node-ts');

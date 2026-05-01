@@ -109,6 +109,21 @@ export async function embed({ text, apiKey, model, fetchImpl } = {}) {
   // of calling Gemini. Used only by smoke tests; documented here as
   // test-only. The same caveat applies as synthesize's stub: no
   // production code path sets it.
+  //
+  // Three accepted shapes:
+  //   JSON array of numbers              — same fixed vector for every input
+  //   {"deterministic": true}            — vector hashed from text bytes
+  //                                        (similar input → similar vector
+  //                                         only if bytes overlap; useful
+  //                                         for "blend doesn't break" tests)
+  //   {"map": {<substring>: [vec], ...}} — input matched against the FIRST
+  //                                        substring that appears in it,
+  //                                        returns that vector. Lets a
+  //                                        test wire up controlled cosine
+  //                                        relationships across inputs
+  //                                        with no shared text (used for
+  //                                        the "pure semantic match"
+  //                                        regression test on PR #7).
   const stub = process.env.HARNESS_EMBED_STUB_RESPONSE;
   if (stub) {
     try {
@@ -119,15 +134,32 @@ export async function embed({ text, apiKey, model, fetchImpl } = {}) {
       ) {
         return parsed;
       }
-      // Stub can also be a function name => deterministic vector from text
       if (parsed && parsed.deterministic === true) {
         return deterministicVectorFromText(safeText);
+      }
+      if (parsed && parsed.map && typeof parsed.map === 'object') {
+        const lower = safeText.toLowerCase();
+        for (const [needle, vec] of Object.entries(parsed.map)) {
+          if (
+            lower.includes(needle.toLowerCase()) &&
+            Array.isArray(vec) &&
+            vec.every((v) => typeof v === 'number')
+          ) {
+            return vec;
+          }
+        }
+        if (Array.isArray(parsed.fallback)) return parsed.fallback;
+        // No matching substring and no fallback — return a zero vector of
+        // the same length as the first mapped vector so cosine similarity
+        // is well-defined (denom > 0 only if both inputs match a needle).
+        const firstVec = Object.values(parsed.map)[0];
+        if (Array.isArray(firstVec)) return firstVec.map(() => 0);
       }
     } catch {
       // fall through to throwing below
     }
     throw new Error(
-      'HARNESS_EMBED_STUB_RESPONSE must be a JSON array of numbers or {"deterministic":true}.'
+      'HARNESS_EMBED_STUB_RESPONSE must be a JSON array of numbers, {"deterministic":true}, or {"map":{...}}.'
     );
   }
 
