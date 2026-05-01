@@ -11,6 +11,16 @@ council:
   # Personas auto-discovered from .harness/council/*.md (excludes README + lead-architect).
   # To disable an angle, rename to <angle>.md.disabled.
   default_model: gemini-2.5-pro
+
+  # Specialized-personas mode: when true, `harness check` and `drift-check.yml`
+  # skip the canonical 7 reviewer personas (architecture, security, bugs, cost,
+  # product, accessibility, maintainability) when reporting "missing" files.
+  # Set true if this repo deliberately replaces the canonical reviewer set with
+  # domain-specific personas (e.g., sportsdata uses data-quality / statistical-
+  # validity / prediction-accuracy / domain-expert / mathematics). lead-architect
+  # is still required (the council runner expects it as the synthesis persona).
+  specialized: false
+
   # Must stay in sync with MONTHLY_CAP in .github/workflows/council.yml.
   monthly_cap: 60
   # Hard-enforced by CALL_CAP in .harness/scripts/council.py — change the

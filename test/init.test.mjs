@@ -161,6 +161,47 @@ function expectFile(dir, rel) {
   }
 }
 
+// Test 11: harness check respects council.specialized: true in harness.yml —
+// canonical reviewer personas are skipped, lead-architect still required.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    // Delete the canonical reviewer personas (simulating a specialized repo).
+    for (const f of [
+      'accessibility.md', 'architecture.md', 'bugs.md', 'cost.md',
+      'maintainability.md', 'product.md', 'security.md',
+    ]) {
+      fs.unlinkSync(path.join(dir, '.harness/council/', f));
+    }
+
+    // Without specialized mode → check should report 7 missing.
+    let beforeOut = '';
+    try {
+      beforeOut = run(`node "${CLI}" check`, dir);
+    } catch (e) {
+      beforeOut = (e.stdout || '') + (e.stderr || '');
+    }
+    assert(beforeOut.includes('missing  7'), `expected 7 missing, got: ${beforeOut}`);
+
+    // Set specialized: true in harness.yml.
+    const yamlPath = path.join(dir, 'harness.yml');
+    let yaml = fs.readFileSync(yamlPath, 'utf8');
+    yaml = yaml.replace(/^council:/m, 'council:\n  specialized: true');
+    fs.writeFileSync(yamlPath, yaml);
+
+    // Now check should skip all 7 and exit 0.
+    const afterOut = run(`node "${CLI}" check`, dir);
+    assert(afterOut.includes('missing  0'), `expected 0 missing after specialized=true, got: ${afterOut}`);
+    assert(afterOut.includes('skipped'), 'expected skipped count in output');
+    assert(afterOut.includes('specialized'), 'expected specialized label in header');
+
+    console.log('PASS: harness check respects council.specialized: true');
+  } finally {
+    cleanup(dir);
+  }
+}
+
 // Test 10: ambiguous [[link]] — lint warns, recall does not silently pick.
 {
   const dir = makeTempRepo('node-ts');
