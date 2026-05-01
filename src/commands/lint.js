@@ -23,6 +23,10 @@ import path from 'path';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
 import { findChunkBySlug, extractLinks } from '../lib/links.js';
+import {
+  loadFailures,
+  findDuplicateSignalClusters,
+} from '../lib/failures.js';
 
 const REQUIRED_FAILURE_FIELDS = [
   'ts',
@@ -73,22 +77,6 @@ function loadLearnings(cwd) {
   const p = path.join(cwd, '.harness/learnings.md');
   if (!fs.existsSync(p)) return null;
   return { path: '.harness/learnings.md', content: fs.readFileSync(p, 'utf8') };
-}
-
-function loadFailures(cwd) {
-  const p = path.join(cwd, '.harness/failures.jsonl');
-  if (!fs.existsSync(p)) return [];
-  const lines = fs.readFileSync(p, 'utf8').split('\n');
-  return lines
-    .map((line, idx) => ({ line, lineNo: idx + 1 }))
-    .filter((x) => x.line.trim().length > 0)
-    .map(({ line, lineNo }) => {
-      try {
-        return { ok: true, lineNo, raw: line, parsed: JSON.parse(line) };
-      } catch (e) {
-        return { ok: false, lineNo, raw: line, error: e.message };
-      }
-    });
 }
 
 function chunkLearnings(content) {
@@ -343,26 +331,14 @@ function checkBrokenLinks(learnings, failureLines) {
 }
 
 function checkDuplicateSignal(failureLines) {
-  const issues = [];
-  const groups = new Map();
-  for (const f of failureLines) {
-    if (!f.ok) continue;
-    const key = `${f.parsed.failure_class}|${f.parsed.sensor_involved}|${f.parsed.guide_gap}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(f);
-  }
-  for (const [key, group] of groups.entries()) {
-    if (group.length >= 3) {
-      issues.push({
-        severity: 'warning',
-        check: 'duplicate_signal',
-        source: '.harness/failures.jsonl',
-        line: group[0].lineNo,
-        message: `${group.length} failures share signature [${key}] — consider a synthesis page in learnings.md`,
-      });
-    }
-  }
-  return issues;
+  const clusters = findDuplicateSignalClusters(failureLines);
+  return clusters.map((c) => ({
+    severity: 'warning',
+    check: 'duplicate_signal',
+    source: '.harness/failures.jsonl',
+    line: c.failures[0].lineNo,
+    message: `${c.failures.length} failures share signature [${c.signature}] (hash ${c.signatureHash}) — run \`harness synthesize\` to draft a synthesis page in learnings.md`,
+  }));
 }
 
 export async function lint(options) {

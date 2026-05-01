@@ -9,6 +9,7 @@ import { plan } from './commands/plan.js';
 import { review } from './commands/review.js';
 import { recipe } from './commands/recipe.js';
 import { learn } from './commands/learn.js';
+import { synthesize } from './commands/synthesize.js';
 import chalk from 'chalk';
 
 const program = new Command();
@@ -93,6 +94,15 @@ program
   .description('Generate reusable recipes from completed plans')
   .option('--from-session', 'Learn from the most recent plan + aider-instructions')
   .action(learn);
+
+program
+  .command('synthesize')
+  .description('Auto-draft synthesis pages in learnings.md from duplicate-signal failure clusters')
+  .option('--apply', 'Call Gemini and append draft sections to learnings.md (default: dry-run)')
+  .option('--cluster <hash>', 'Process only the cluster with this signature hash')
+  .option('--max <n>', 'Maximum clusters to process per --apply run', (v) => parseInt(v, 10))
+  .option('-m, --model <name>', 'Gemini model to use')
+  .action(synthesize);
 
 program
   .command('status')
