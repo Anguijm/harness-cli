@@ -6,6 +6,7 @@ __pycache__/
 .harness/yolo_log.jsonl
 .harness/embeddings.json
 .harness/.learnings.synthesize.lock
+.harness/.reindex.lock
 .budget/
 *.log
 *.pyc

@@ -41,6 +41,10 @@ function isSpecializedMode(cwd) {
         `  Path: ${path.join(cwd, 'harness.yml')}\n  Fix the YAML syntax error and re-run.`
       )
     );
+    // Exit 2 = config / runtime error, consistent with synthesize's
+    // EXIT_CONFIG_OR_RUNTIME_ERROR and reindex. Shell scripts can branch
+    // on `case $? in 0) … 1) … 2) …` to distinguish clean success (0),
+    // caller-input mistake (1), and config / setup failure (2).
     process.exit(2);
   }
   return (

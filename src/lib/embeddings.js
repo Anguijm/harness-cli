@@ -180,6 +180,12 @@ export async function embed({ text, apiKey, model, fetchImpl } = {}) {
 // cosine similarity behaviors without coupling to a real model.
 export function deterministicVectorFromText(text) {
   const digest = crypto.createHash('sha256').update(String(text)).digest();
+  // 32-dim vector — uses every byte of the SHA-256 digest exactly once.
+  // Bigger dimension would force us to either hash twice or pad with
+  // repeated bytes, both of which dilute the per-byte information; 32 is
+  // the natural ceiling here. Real embeddings are 768-dim, so this is
+  // only ever used for tests where dimension count doesn't matter as long
+  // as both sides of a cosine comparison agree.
   const dim = 32;
   const vec = new Array(dim);
   for (let i = 0; i < dim; i++) {
