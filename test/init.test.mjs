@@ -129,6 +129,105 @@ function expectFile(dir, rel) {
   }
 }
 
+// Test 8: harness recall follows [[wiki-style]] cross-references one hop at half score.
+// Setup: query keyword appears ONLY in section A; section A links to section B
+// which has no overlapping keyword. Recall should include B as "linked via".
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    fs.mkdirSync(path.join(dir, '.harness'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      [
+        '# Learnings',
+        '',
+        '## 2026-04-20 — vertebrate fossils',
+        '### IMPROVE',
+        '- See [[meteor crater]] for related geological context.',
+        '',
+        '## 2026-04-25 — meteor crater',
+        '### KEEP',
+        '- Distinct topic with totally separate content, no overlapping words.',
+        '',
+      ].join('\n')
+    );
+    const out = run(`node "${CLI}" recall "vertebrate"`, dir);
+    assert(out.includes('vertebrate fossils'), 'expected direct match');
+    assert(out.includes('meteor crater'), 'expected linked entry to surface');
+    assert(out.includes('linked via'), 'expected linked-via annotation');
+    console.log('PASS: harness recall follows [[wiki-style]] cross-references');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 10: ambiguous [[link]] — lint warns, recall does not silently pick.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    fs.mkdirSync(path.join(dir, '.harness'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      [
+        '# Learnings',
+        '',
+        '## 2026-05-01 — alpha unique direct hit',
+        '### IMPROVE',
+        '- See [[shared]] for context.',
+        '',
+        '## 2026-05-02 — shared topic v1',
+        '### KEEP',
+        '- one of two collisions',
+        '',
+        '## 2026-05-03 — shared topic v2',
+        '### KEEP',
+        '- the other collision',
+        '',
+      ].join('\n')
+    );
+    let lintOut = '';
+    try {
+      lintOut = run(`node "${CLI}" lint`, dir);
+    } catch (e) {
+      lintOut = (e.stdout || '') + (e.stderr || '');
+    }
+    assert(lintOut.includes('ambiguous_links'), 'lint should flag ambiguous [[shared]]');
+
+    const recallOut = run(`node "${CLI}" recall "alpha"`, dir);
+    assert(recallOut.includes('alpha unique'), 'recall should find direct hit');
+    assert(
+      !recallOut.includes('linked via'),
+      'recall should NOT follow ambiguous link silently'
+    );
+    console.log('PASS: ambiguous [[link]] — lint warns, recall skips silently');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 9: harness lint flags broken [[wiki-style]] links.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    fs.mkdirSync(path.join(dir, '.harness'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      '# Learnings\n\n## 2026-04-30 — entry with broken link\n\n### IMPROVE\n- See [[does not exist]] for context.\n'
+    );
+    let out = '';
+    try {
+      out = run(`node "${CLI}" lint`, dir);
+    } catch (e) {
+      out = (e.stdout || '') + (e.stderr || '');
+    }
+    assert(out.includes('broken_links'), 'expected broken_links warning');
+    assert(out.includes('does not exist'), 'expected the bad link text in output');
+    console.log('PASS: harness lint flags broken [[wiki-style]] links');
+  } finally {
+    cleanup(dir);
+  }
+}
+
 // Test 7: harness lint finds known issues in a synthetic dirty corpus.
 {
   const dir = makeTempRepo('node-ts');

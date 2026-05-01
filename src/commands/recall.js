@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
+import { findChunkBySlug, extractLinks } from '../lib/links.js';
 
 // Queryable memory retrieval. Surfaces past entries from learnings.md,
 // yolo_log.jsonl, last_council.md, failures.jsonl etc. that match the
@@ -29,6 +30,16 @@ const STOP = new Set([
   'the', 'this', 'to', 'was', 'were', 'will', 'with', 'when', 'how',
   'what', 'why', 'who', 'do', 'does', 'should', 'would', 'could',
 ]);
+
+// Wiki-style cross-references and slug resolution are in src/lib/links.js
+// (shared with harness lint).
+//
+// Score multiplier for chunks reached via [[link]]: 0.5. Heuristic chosen
+// to keep linked context relevant but subordinate to direct matches.
+// Increasing toward 1.0 lets linked items displace more relevant direct
+// hits; below ~0.25 they don't surface meaningfully when direct matches
+// also exist. (Documented per maintainability remediation, PR #3 R1.)
+const LINKED_SCORE_MULTIPLIER = 0.5;
 
 function tokenize(s) {
   return (s.toLowerCase().match(/[a-z][a-z0-9_-]+/g) || []).filter(
@@ -175,12 +186,45 @@ export async function recall(query, options) {
   }
 
   const scored = chunks
-    .map((c) => ({ chunk: c, score: score(c, queryTokens) }))
-    .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score);
+    .map((c) => ({ chunk: c, score: score(c, queryTokens), via: null }))
+    .filter((x) => x.score > 0);
+
+  // Follow [[wiki-style]] cross-references one hop deep. Linked chunks
+  // are added to the candidate pool at half score, then the combined
+  // pool is re-sorted and sliced to `limit`. This means linked context
+  // can replace lower-scoring direct hits when more relevant, but
+  // never extends the result count past the user's limit. (Bugs
+  // reviewer R1 PR #3: previous behavior expanded the limit AND
+  // skipped re-sort, both incorrect.)
+  const seen = new Set(scored.map((s) => s.chunk.text));
+  const linked = [];
+  for (const hit of scored) {
+    const links = extractLinks(hit.chunk.text);
+    for (const linkText of links) {
+      const { chunk: target, ambiguous } = findChunkBySlug(chunks, linkText);
+      if (!target) continue;
+      // Skip ambiguous resolutions — silently picking the first of
+      // several plausible matches is worse than not following the link.
+      // `harness lint` separately surfaces these as ambiguous_links
+      // warnings so the author can disambiguate. (Bugs reviewer R2 PR #3.)
+      if (ambiguous) continue;
+      if (seen.has(target.text)) continue;
+      seen.add(target.text);
+      linked.push({
+        chunk: target,
+        score: hit.score * LINKED_SCORE_MULTIPLIER,
+        via: linkText,
+      });
+    }
+  }
 
   const limit = options.limit || 5;
-  const top = scored.slice(0, limit);
+  const top = [...scored, ...linked]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+
+  const directInTop = top.filter((t) => !t.via).length;
+  const linkedInTop = top.filter((t) => t.via).length;
 
   if (top.length === 0) {
     console.log(chalk.dim(`No matches in ${chunks.length} chunks across ${sources.length} sources.`));
@@ -188,13 +232,14 @@ export async function recall(query, options) {
   }
 
   console.log(`# Recall: "${query}"`);
-  console.log(`_${top.length} of ${scored.length} matching chunks (scanned ${chunks.length} total) — ranked by keyword × recency_`);
+  console.log(`_${directInTop} direct match${directInTop === 1 ? '' : 'es'}, ${linkedInTop} linked from those (scanned ${chunks.length} chunks total, limit ${limit})_`);
   console.log();
 
-  for (const { chunk, score } of top) {
+  for (const { chunk, score, via } of top) {
     const dateLabel = chunk.date ? ` — ${chunk.date}` : '';
+    const viaLabel = via ? `  _(linked via [[${via}]])_` : '';
     console.log(`---`);
-    console.log(`**Source:** \`${chunk.source}\`${dateLabel}  _(score ${score.toFixed(2)})_`);
+    console.log(`**Source:** \`${chunk.source}\`${dateLabel}  _(score ${score.toFixed(2)})_${viaLabel}`);
     console.log();
     console.log(formatExcerpt(chunk));
     console.log();
