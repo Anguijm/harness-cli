@@ -50,7 +50,7 @@ Today `council.py` sees only the git diff. The computational sensors run in para
 - Below ~2K, the diff remains the dominant signal; sensor results scaffold the diff rather than displace it.
 - Above ~2K, prompt cost grows linearly across all 7 personas (so 2K → 4K = +14K tokens per council run) without proportional verdict-quality gain on observed cases.
 - Truncation strategy: keep the head and tail of each tool's output (errors typically appear at one or the other), drop the middle, mark the elision visibly.
-- The cap is per-persona-prompt, not per-tool. Multi-tool budgets split proportionally to each tool's failure-rate.
+- The cap is per-persona-prompt, not per-tool. Multi-tool budgets split proportionally to each tool's failure-rate, **with a guaranteed floor of 200 tokens per failed tool** so a single verbose tool can't starve the others. If the floors don't fit (e.g., 6 failed tools × 200 = 1.2K leaves 800 to split), shrink each tool's allocation toward the floor in proportion to its share, and emit a visible note in the injected block so personas know multiple tools were aggressively truncated.
 
 **Verdict-quality characterization (required before merge).** The implementation PR must include:
 - A small "golden set" of historical PRs with known-correct verdicts (mix of CLEAR / CONDITIONAL / BLOCK).
@@ -135,7 +135,7 @@ Today: `branch-guard.yml` is a post-hoc detector. A direct push to main fails th
 - **Manually triggered, not on push.** The script runs from `.github/workflows/setup-branch-protection.yml` configured with `workflow_dispatch` only, gated on a GitHub Environment (`branch-protection-admin`) with required reviewers, so the admin-token call requires human approval at execution time.
 - **Documented teardown.** Ship `scripts/teardown-branch-protection.sh` (or document the `gh api` calls inline in the doctrine page) that removes the rules in the same shape it added them. Without a teardown, an org locks itself out of legitimate emergency operations.
 - **Test seam.** The script's API-call function takes the `gh` invocation as a parameter so a unit test can run the dry-run path against a fake and assert the expected call list.
-- **Idempotent on `--apply`.** Re-running `--apply` against an already-configured branch is a no-op (or a clear "already configured, skipping").
+- **Idempotent on `--apply` with convergence from partial state.** Re-running `--apply` reads the current branch-protection config, computes the diff against the desired state, and applies only the missing pieces. A fully-configured branch is a no-op; a partially-configured branch (e.g., a previous run failed midway, or an admin removed one rule manually) converges to the correct state. The script does NOT short-circuit on "rules exist" — that would leave drift in place.
 
 **Effort:** ~1 day (was ~½d; dry-run + teardown + workflow gating add real work).
 
@@ -160,7 +160,7 @@ After all four: 🟢 CLEAR verdict + green CI is genuinely trustworthy without h
 
 1. **E.2 default mode.** Conservative-only is the canonical default and the only mode shipped in Phase E. Auto-revert PR is a deferred follow-up that will need its own plan + council review once smoke false-positive rate is measured.
 2. **E.3 stack coverage.** Start with node-ts (StrykerJS) or python (mutmut) first? Recommend node-ts since most consumer repos are TS. Add python as a follow-up.
-3. **E.3 mutation threshold.** What's the failing score? 60% kill rate is industry middle-of-the-road; lower means the suite has lots of dead tests. Recommend advisory-only at first, calibrate per repo, then gate at the worst observed score minus 5%.
+3. **E.3 mutation threshold.** What's the failing score? 60% kill rate is industry middle-of-the-road; lower means the suite has lots of dead tests. Recommend advisory-only at first, calibrate per repo, then gate at the worst observed score minus 5%. The 5% buffer is a small allowance to absorb run-to-run variance from non-deterministic tests (timing, network, randomized inputs) without churning the gate; it's a starting point, not a constant — tighten toward 2–3% once the suite is reliable, loosen if observed variance is wider.
 4. **E.4 enforcement scope.** Only main, or also feature branches that are PR'd? Recommend main-only to start.
 5. **Where do smoke tests live?** Recommend `tests/smoke/` (or `__tests__/smoke/`) by convention, with `harness.yml` pointing at the glob.
 
