@@ -460,4 +460,228 @@ function expectFile(dir, rel) {
   }
 }
 
+// Test 15: harness synthesize discovers duplicate-signal clusters in dry-run mode.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    fs.mkdirSync(path.join(dir, '.harness'), { recursive: true });
+    // Three failures sharing the same {class, sensor, gap} signature.
+    const f = (ts, what) =>
+      JSON.stringify({
+        ts,
+        failure_class: 'sensor_miss',
+        what_happened: what,
+        sensor_involved: 'a11y_persona',
+        guide_gap: 'persona_scope_too_narrow',
+        fix_sha: 'a'.repeat(7),
+      });
+    fs.writeFileSync(
+      path.join(dir, '.harness/failures.jsonl'),
+      [
+        f('2026-04-01T00:00:00Z', 'a11y persona missed alt text'),
+        f('2026-04-15T00:00:00Z', 'a11y persona missed contrast'),
+        f('2026-04-29T00:00:00Z', 'a11y persona hallucinated i18n'),
+      ].join('\n') + '\n'
+    );
+    const out = run(`node "${CLI}" synthesize`, dir);
+    assert(out.includes('1 pending cluster'), `expected one cluster, got: ${out}`);
+    assert(
+      out.includes('sensor_miss|a11y_persona|persona_scope_too_narrow'),
+      'expected the canonical signature in the dry-run output'
+    );
+    assert(out.includes('Dry run'), 'expected explicit dry-run notice');
+    // Dry-run must not modify learnings.md.
+    const learnings = fs.readFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      'utf8'
+    );
+    assert(
+      !learnings.includes('SYNTHESIS'),
+      'dry-run must not append synthesis sections to learnings.md'
+    );
+    console.log('PASS: harness synthesize dry-run discovers clusters');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 16: harness synthesize --apply writes a properly-formatted, marker-tagged section
+// (uses HARNESS_SYNTHESIZE_STUB_RESPONSE so no API call is made).
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    const f = (ts) =>
+      JSON.stringify({
+        ts,
+        failure_class: 'council_drift',
+        what_happened: 'council kept hallucinating',
+        sensor_involved: 'council',
+        guide_gap: 'persona_scope',
+        fix_sha: 'b'.repeat(7),
+      });
+    fs.writeFileSync(
+      path.join(dir, '.harness/failures.jsonl'),
+      [
+        f('2026-04-01T00:00:00Z'),
+        f('2026-04-15T00:00:00Z'),
+        f('2026-04-29T00:00:00Z'),
+      ].join('\n') + '\n'
+    );
+    // Multi-line bodies in every section. The earlier regex-with-/m parser
+    // truncated each body to its first line; this stub deliberately uses
+    // multi-paragraph SUMMARY and GUIDE_GAP_AND_FIX plus three bullet
+    // points so a regression to that bug is caught here.
+    const stub = [
+      'PATTERN_NAME: hallucinating council recurrence',
+      '',
+      'SUMMARY:',
+      'Three failures show the same persona ignoring the canonical scope.',
+      'The pattern is consistent across distinct trigger contexts.',
+      '',
+      'It compounds with prior plan-drift incidents.',
+      '',
+      'GUIDE_GAP_AND_FIX:',
+      'Persona scope is too vague.',
+      'Tighten with explicit boundaries listing what the persona must NOT do.',
+      '',
+      'CONTRIBUTING_FAILURES:',
+      '- 2026-04-01: persona made up an i18n requirement',
+      '- 2026-04-15: persona invented an a11y rule',
+      '- 2026-04-29: persona conflated a11y and i18n again',
+    ].join('\n');
+    const env = { ...process.env, HARNESS_SYNTHESIZE_STUB_RESPONSE: stub, GEMINI_API_KEY: 'stub' };
+    execSync(`node "${CLI}" synthesize --apply`, {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: 'pipe',
+      env,
+    });
+    const learnings = fs.readFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      'utf8'
+    );
+    assert(
+      learnings.includes('SYNTHESIS (auto-draft)'),
+      'expected an auto-draft section header in learnings.md'
+    );
+    assert(
+      /<!--\s*synthesis:\s*[0-9a-f]{6,16}\s*-->/.test(learnings),
+      'expected an idempotency marker comment'
+    );
+    assert(
+      learnings.includes('hallucinating council recurrence'),
+      'expected the synthesized pattern name'
+    );
+    // Multi-line preservation: each body must include its later lines, not
+    // only the first.
+    assert(
+      learnings.includes('compounds with prior plan-drift incidents'),
+      'multi-line SUMMARY body was truncated — parser regressed to first-line-only behavior'
+    );
+    assert(
+      learnings.includes('listing what the persona must NOT do'),
+      'multi-line GUIDE_GAP_AND_FIX body was truncated'
+    );
+    assert(
+      learnings.includes('conflated a11y and i18n again'),
+      'CONTRIBUTING_FAILURES list was truncated to its first bullet'
+    );
+    console.log('PASS: harness synthesize --apply writes a marked section');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 17: synthesize is idempotent — clusters whose marker already exists are skipped.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    const f = (ts) =>
+      JSON.stringify({
+        ts,
+        failure_class: 'plan_drift',
+        what_happened: 'plan and impl diverged',
+        sensor_involved: 'council',
+        guide_gap: 'plan_lacked_impact_map',
+        fix_sha: 'c'.repeat(7),
+      });
+    fs.writeFileSync(
+      path.join(dir, '.harness/failures.jsonl'),
+      [
+        f('2026-04-01T00:00:00Z'),
+        f('2026-04-15T00:00:00Z'),
+        f('2026-04-29T00:00:00Z'),
+      ].join('\n') + '\n'
+    );
+    // Compute expected hash to plant a pre-existing marker.
+    const { hashSignature } = await import(
+      path.resolve('src/lib/failures.js')
+    );
+    const sig = 'plan_drift|council|plan_lacked_impact_map';
+    const hash = hashSignature(sig);
+    fs.appendFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      `\n\n## 2026-04-30 — SYNTHESIS (auto-draft) — pre-existing\n<!-- synthesis: ${hash} -->\n\nplaceholder\n`
+    );
+    const out = run(`node "${CLI}" synthesize`, dir);
+    assert(
+      out.includes('All') && out.includes('already have synthesis'),
+      `expected idempotency skip message, got: ${out}`
+    );
+    console.log('PASS: harness synthesize is idempotent on existing markers');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 18: synthesize --apply without GEMINI_API_KEY fails loud (no silent dry-run).
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    const f = (ts) =>
+      JSON.stringify({
+        ts,
+        failure_class: 'hook_misfire',
+        what_happened: 'hook fired late',
+        sensor_involved: 'pre-push',
+        guide_gap: 'hook_timeout_too_low',
+        fix_sha: 'd'.repeat(7),
+      });
+    fs.writeFileSync(
+      path.join(dir, '.harness/failures.jsonl'),
+      [
+        f('2026-04-01T00:00:00Z'),
+        f('2026-04-15T00:00:00Z'),
+        f('2026-04-29T00:00:00Z'),
+      ].join('\n') + '\n'
+    );
+    const env = { ...process.env };
+    delete env.GEMINI_API_KEY;
+    delete env.HARNESS_SYNTHESIZE_STUB_RESPONSE;
+    let err;
+    try {
+      execSync(`node "${CLI}" synthesize --apply`, {
+        cwd: dir,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env,
+      });
+    } catch (e) {
+      err = e;
+    }
+    assert(err, 'expected non-zero exit when --apply is set without GEMINI_API_KEY');
+    assert(
+      String(err.stderr || '').includes('GEMINI_API_KEY not set'),
+      `expected fail-loud message, got: ${err.stderr}`
+    );
+    console.log('PASS: harness synthesize --apply fails loud without API key');
+  } finally {
+    cleanup(dir);
+  }
+}
+
 console.log('All tests passed.');

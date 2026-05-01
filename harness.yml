@@ -34,6 +34,16 @@ commands:
   typecheck: npm run typecheck
   test: npm test
 
+# Synthesis page generation — `harness synthesize` settings.
+# When .harness/failures.jsonl accumulates ≥ min_cluster_size failures sharing
+# `failure_class | sensor_involved | guide_gap`, `harness synthesize --apply`
+# drafts an auto-marked synthesis section in learnings.md. Read-only by
+# default; --apply requires GEMINI_API_KEY.
+synthesize:
+  model: gemini-2.5-flash   # cheaper/faster model for drafting
+  max: 5                    # cap clusters per --apply run (cost guardrail)
+  min_cluster_size: 3       # threshold matches lint's duplicate_signal check
+
 # Methodology
 cadence: tick-tock        # tick = new feature, tock = refine/cleanup
 memory: true              # persist decisions across sessions in .harness/
