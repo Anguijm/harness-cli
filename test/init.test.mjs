@@ -529,19 +529,27 @@ function expectFile(dir, rel) {
         f('2026-04-29T00:00:00Z'),
       ].join('\n') + '\n'
     );
+    // Multi-line bodies in every section. The earlier regex-with-/m parser
+    // truncated each body to its first line; this stub deliberately uses
+    // multi-paragraph SUMMARY and GUIDE_GAP_AND_FIX plus three bullet
+    // points so a regression to that bug is caught here.
     const stub = [
       'PATTERN_NAME: hallucinating council recurrence',
       '',
       'SUMMARY:',
       'Three failures show the same persona ignoring the canonical scope.',
+      'The pattern is consistent across distinct trigger contexts.',
+      '',
+      'It compounds with prior plan-drift incidents.',
       '',
       'GUIDE_GAP_AND_FIX:',
-      'Persona scope is too vague — tighten with explicit boundaries.',
+      'Persona scope is too vague.',
+      'Tighten with explicit boundaries listing what the persona must NOT do.',
       '',
       'CONTRIBUTING_FAILURES:',
-      '- 2026-04-01: hallucinating',
-      '- 2026-04-15: hallucinating',
-      '- 2026-04-29: hallucinating',
+      '- 2026-04-01: persona made up an i18n requirement',
+      '- 2026-04-15: persona invented an a11y rule',
+      '- 2026-04-29: persona conflated a11y and i18n again',
     ].join('\n');
     const env = { ...process.env, HARNESS_SYNTHESIZE_STUB_RESPONSE: stub, GEMINI_API_KEY: 'stub' };
     execSync(`node "${CLI}" synthesize --apply`, {
@@ -565,6 +573,20 @@ function expectFile(dir, rel) {
     assert(
       learnings.includes('hallucinating council recurrence'),
       'expected the synthesized pattern name'
+    );
+    // Multi-line preservation: each body must include its later lines, not
+    // only the first.
+    assert(
+      learnings.includes('compounds with prior plan-drift incidents'),
+      'multi-line SUMMARY body was truncated — parser regressed to first-line-only behavior'
+    );
+    assert(
+      learnings.includes('listing what the persona must NOT do'),
+      'multi-line GUIDE_GAP_AND_FIX body was truncated'
+    );
+    assert(
+      learnings.includes('conflated a11y and i18n again'),
+      'CONTRIBUTING_FAILURES list was truncated to its first bullet'
     );
     console.log('PASS: harness synthesize --apply writes a marked section');
   } finally {

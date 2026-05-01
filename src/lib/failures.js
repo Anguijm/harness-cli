@@ -9,6 +9,11 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
+// Canonical "this is a recurring pattern, not a one-off" threshold. Shared
+// by `harness lint`'s duplicate_signal check and `harness synthesize`'s
+// cluster discovery. Lowering to 2 produces noisy synthesis suggestions on
+// weak patterns; raising to 4 misses real recurrences. Per-repo override
+// via `synthesize.min_cluster_size` in harness.yml.
 export const DUPLICATE_SIGNAL_THRESHOLD = 3;
 
 export function loadFailures(cwd) {
@@ -58,12 +63,17 @@ export function findDuplicateSignalClusters(
 }
 
 // Deterministic short hash of a cluster signature, used as the idempotency
-// marker in learnings.md. 8 hex chars = ~32 bits; collision-resistant enough
-// across the dozen-or-so clusters a long-lived repo will accumulate.
+// marker in learnings.md. 16 hex chars = 64 bits — birthday-collision
+// probability at 100K clusters is < 3e-10, well below any real-repo
+// trajectory. (Council PR #6 R1 flagged the original 8 hex / 32 bits as
+// having ~1% collision rate at ~1000 clusters; bumped before any consumer
+// repo has a marker so no migration cost.)
+export const SIGNATURE_HASH_LENGTH = 16;
+
 export function hashSignature(signature) {
   return crypto
     .createHash('sha256')
     .update(signature)
     .digest('hex')
-    .slice(0, 8);
+    .slice(0, SIGNATURE_HASH_LENGTH);
 }

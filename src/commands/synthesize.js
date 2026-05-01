@@ -60,24 +60,40 @@ CONTRIBUTING_FAILURES:
 - ...
 `;
 
-const CLOSING_TAG = '</UNTRUSTED_FAILURE_RECORD>';
-const CLOSING_TAG_ESCAPED = '<\\/UNTRUSTED_FAILURE_RECORD>';
+// Every untrusted-data wrapper closing tag we use anywhere in synthesis
+// prompts. sanitizeUntrusted escapes ALL of these inside any captured
+// payload so a crafted failure record or learnings excerpt can't smuggle
+// in a closing tag and break out of whichever block it lives in. Codex
+// caught the original implementation only escaping the failure-record
+// tag; learnings excerpts had the same hole.
+const UNTRUSTED_CLOSING_TAGS = [
+  '</UNTRUSTED_FAILURE_RECORD>',
+  '</UNTRUSTED_LEARNINGS_EXCERPTS>',
+];
+const FAILURE_RECORD_CLOSING_TAG = UNTRUSTED_CLOSING_TAGS[0];
+
+function escapeClosingTag(tag) {
+  return tag.replace('</', '<\\/');
+}
 
 function sanitizeUntrusted(text) {
   if (text === null || text === undefined) return '';
-  return String(text)
-    // Strip ASCII control chars (except newline + tab) and zero-width chars
+  let s = String(text)
+    // Strip ASCII control chars (except \t \n \r) and Unicode zero-width /
+    // bidi-override chars that could visually break out of a tag.
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2060-\u2069]/g, '')
-    // Cap any run of newlines at two so the model can't be visually fooled
-    // into thinking the tag closed early.
-    .replace(/\n{3,}/g, '\n\n')
-    // Escape the literal closing tag if the data contains it.
-    .replace(new RegExp(CLOSING_TAG, 'g'), CLOSING_TAG_ESCAPED);
+    // Cap any run of newlines at two: long blank runs make it easier for
+    // the model to be visually fooled into thinking a tag closed.
+    .replace(/\n{3,}/g, '\n\n');
+  for (const tag of UNTRUSTED_CLOSING_TAGS) {
+    s = s.replace(new RegExp(tag, 'g'), escapeClosingTag(tag));
+  }
+  return s;
 }
 
 function wrapFailureRecord(failure) {
   const safe = sanitizeUntrusted(JSON.stringify(failure.parsed, null, 2));
-  return `<UNTRUSTED_FAILURE_RECORD source=".harness/failures.jsonl" line="${failure.lineNo}">\n${safe}\n${CLOSING_TAG}`;
+  return `<UNTRUSTED_FAILURE_RECORD source=".harness/failures.jsonl" line="${failure.lineNo}">\n${safe}\n${FAILURE_RECORD_CLOSING_TAG}`;
 }
 
 function findRelevantLearnings(learningsContent, signature) {
@@ -95,9 +111,13 @@ function findRelevantLearnings(learningsContent, signature) {
   for (const sec of sections) {
     const lower = sec.toLowerCase();
     const hits = tokens.filter((t) => lower.includes(t)).length;
+    // Require at least 2 token overlaps with the cluster signature: a single
+    // hit on a generic word (e.g. "council") drags in unrelated sections.
     if (hits >= 2) matches.push({ section: '## ' + sec, hits });
   }
   matches.sort((a, b) => b.hits - a.hits);
+  // Cap at the 3 most relevant sections — prompts past that dilute the
+  // synthesizer's focus and burn token budget on weak-signal context.
   return matches
     .slice(0, 3)
     .map((m) => sanitizeUntrusted(m.section))
@@ -129,6 +149,11 @@ async function callGeminiDefault({ model, apiKey, systemPrompt, userPrompt }) {
   const body = {
     systemInstruction: { parts: [{ text: systemPrompt }] },
     contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+    // temperature 0.4: balanced — 0.0 produces stilted boilerplate, > 0.7
+    //   tends to invent fixes that don't appear in the failure records.
+    // maxOutputTokens 1024: a typical synthesis is ~500 tokens; ceiling
+    //   keeps cost and response time bounded. If drafts come back
+    //   truncated the cluster is unusually large and the cap should rise.
     generationConfig: { temperature: 0.4, maxOutputTokens: 1024 },
   };
   const res = await fetch(url, {
@@ -152,29 +177,49 @@ async function callGeminiDefault({ model, apiKey, systemPrompt, userPrompt }) {
   return text;
 }
 
+// Section keys the synthesizer prompt asks for, in order.
+const DRAFT_SECTIONS = [
+  'PATTERN_NAME',
+  'SUMMARY',
+  'GUIDE_GAP_AND_FIX',
+  'CONTRIBUTING_FAILURES',
+];
+
 function parseDraft(text) {
-  // Light parse to validate the model followed the format. Returns the raw
-  // text plus a derived header line; if the format is malformed, throws so
-  // the caller fails loud rather than writing garbage to learnings.md.
-  const nameMatch = text.match(/^\s*PATTERN_NAME:\s*(.+?)\s*$/m);
-  if (!nameMatch) {
-    throw new Error(
-      `Synthesizer response missing PATTERN_NAME line. First 200 chars: ${text.slice(0, 200)}`
-    );
-  }
-  const summaryMatch = text.match(/SUMMARY:\s*([\s\S]*?)(?=^\s*GUIDE_GAP_AND_FIX:|^\s*PATTERN_NAME:|$)/m);
-  const fixMatch = text.match(/GUIDE_GAP_AND_FIX:\s*([\s\S]*?)(?=^\s*CONTRIBUTING_FAILURES:|^\s*PATTERN_NAME:|$)/m);
-  const failuresMatch = text.match(/CONTRIBUTING_FAILURES:\s*([\s\S]*?)$/m);
-  if (!summaryMatch || !fixMatch || !failuresMatch) {
-    throw new Error(
-      'Synthesizer response missing one of SUMMARY / GUIDE_GAP_AND_FIX / CONTRIBUTING_FAILURES sections.'
-    );
+  // Position-based parse: find each section's "KEY:" header, slice the body
+  // from after that header to just before the next section's header (or
+  // end-of-text for the last section). This avoids the regex-with-/m
+  // pitfall where `$` in multiline mode anchors at end-of-line and would
+  // truncate a multi-line body to its first line. (Codex caught the
+  // earlier regex form on PR #6 — only the first SUMMARY line and only the
+  // first contributing-failure bullet were being captured.)
+  const out = {};
+  for (let i = 0; i < DRAFT_SECTIONS.length; i++) {
+    const key = DRAFT_SECTIONS[i];
+    const headerRe = new RegExp(`(?:^|\\n)\\s*${key}:\\s*`, 'm');
+    const headerMatch = headerRe.exec(text);
+    if (!headerMatch) {
+      throw new Error(
+        `Synthesizer response missing ${key} section. First 200 chars: ${text.slice(0, 200)}`
+      );
+    }
+    const bodyStart = headerMatch.index + headerMatch[0].length;
+    let bodyEnd = text.length;
+    for (let j = i + 1; j < DRAFT_SECTIONS.length; j++) {
+      const nextRe = new RegExp(`(?:^|\\n)\\s*${DRAFT_SECTIONS[j]}:`, 'm');
+      const nextMatch = nextRe.exec(text.slice(bodyStart));
+      if (nextMatch) {
+        bodyEnd = bodyStart + nextMatch.index;
+        break;
+      }
+    }
+    out[key] = text.slice(bodyStart, bodyEnd).trim();
   }
   return {
-    name: nameMatch[1].trim(),
-    summary: summaryMatch[1].trim(),
-    fix: fixMatch[1].trim(),
-    failures: failuresMatch[1].trim(),
+    name: out.PATTERN_NAME,
+    summary: out.SUMMARY,
+    fix: out.GUIDE_GAP_AND_FIX,
+    failures: out.CONTRIBUTING_FAILURES,
   };
 }
 
@@ -190,6 +235,11 @@ function loadLearnings(cwd) {
 
 function existingSynthesisHashes(learningsContent) {
   const set = new Set();
+  // Accept 6-16 hex chars: hashSignature currently produces 16, but markers
+  // written by an earlier 8-char build of harness-cli are still honored so
+  // those repos don't suddenly re-draft already-synthesized clusters. Once
+  // the 8-char era is provably gone (no consumer repo carries one) this
+  // can tighten to {16}.
   const re = /<!--\s*synthesis:\s*([0-9a-f]{6,16})\s*-->/g;
   let m;
   while ((m = re.exec(learningsContent)) !== null) set.add(m[1]);
@@ -330,62 +380,130 @@ export async function synthesize(options, deps = {}) {
     process.exit(2);
   }
 
-  const today = now();
-  let appended = 0;
-  let writeBuffer = learnings.content;
-
-  for (const cluster of toProcess) {
-    const userPrompt = buildClusterPrompt(cluster, writeBuffer);
-    let raw;
-    try {
-      raw = await geminiFetch({
-        model,
-        apiKey,
-        systemPrompt: SYSTEM_PROMPT,
-        userPrompt,
-      });
-    } catch (e) {
-      console.error(
-        chalk.red(
-          `Cluster ${cluster.signatureHash}: Gemini call failed (${e.message}). Halting; ${appended} cluster(s) already appended in this run.`
-        )
-      );
-      if (appended > 0) fs.writeFileSync(learnings.path, writeBuffer);
-      process.exit(2);
-    }
-    let draft;
-    try {
-      draft = parseDraft(raw);
-    } catch (e) {
-      console.error(
-        chalk.red(
-          `Cluster ${cluster.signatureHash}: synthesizer response was malformed (${e.message}). Halting.`
-        )
-      );
-      if (appended > 0) fs.writeFileSync(learnings.path, writeBuffer);
-      process.exit(2);
-    }
-    const section = formatSection(cluster, draft, today);
-    writeBuffer += section;
-    appended += 1;
-    console.log(
-      chalk.green(`  ✓ drafted ${cluster.signatureHash} — ${draft.name}`)
+  // Exclusive lock around the read-modify-write on learnings.md. Without
+  // this, two concurrent `synthesize --apply` runs can clobber each other:
+  // each reads the same baseline, generates a draft, then last-writer wins
+  // and silently destroys the other's section. Bugs reviewer flagged this
+  // on PR #6 R1. `wx` is atomic create-if-not-exists; failure means
+  // another run holds the lock or a previous run crashed before releasing.
+  const lockPath = path.join(cwd, '.harness/.learnings.synthesize.lock');
+  let lockFd;
+  try {
+    lockFd = fs.openSync(lockPath, 'wx');
+    fs.writeSync(
+      lockFd,
+      `pid ${process.pid} acquired ${new Date().toISOString()}\n`
     );
+  } catch (e) {
+    if (e.code === 'EEXIST') {
+      console.error(
+        chalk.red(
+          `Another harness synthesize --apply appears to be running (lock file exists at ${path.relative(cwd, lockPath)}).`
+        )
+      );
+      console.error(
+        chalk.dim(
+          '  If no other run is in progress, the previous run crashed before releasing — delete the lock file and retry.'
+        )
+      );
+      process.exit(2);
+    }
+    throw e;
   }
 
-  fs.writeFileSync(learnings.path, writeBuffer);
-  console.log();
-  console.log(
-    chalk.bold(
-      `Appended ${appended} synthesis section(s) to ${path.relative(cwd, learnings.path)}.`
-    )
-  );
-  console.log(
-    chalk.dim(
-      'These are auto-drafts. Review each, refine the wording, and confirm the recommended fix before treating as load-bearing.'
-    )
-  );
-  process.exit(0);
+  let exitCode = 0;
+  try {
+    // Re-read learnings inside the lock to capture any updates that landed
+    // between the dry-run read above and lock acquisition. Re-filter the
+    // candidates against the fresh marker set so we don't redraft a
+    // cluster a concurrent run already handled.
+    const locked = loadLearnings(cwd);
+    const lockedDone = existingSynthesisHashes(locked.content);
+    const stillPending = toProcess.filter(
+      (c) => !lockedDone.has(c.signatureHash)
+    );
+
+    if (stillPending.length === 0) {
+      console.log(
+        chalk.green(
+          'All targeted cluster(s) already have synthesis sections (likely written by a concurrent run). Nothing to do.'
+        )
+      );
+    } else {
+      const today = now();
+      let appended = 0;
+      let writeBuffer = locked.content;
+
+      for (const cluster of stillPending) {
+        const userPrompt = buildClusterPrompt(cluster, writeBuffer);
+        let raw;
+        try {
+          raw = await geminiFetch({
+            model,
+            apiKey,
+            systemPrompt: SYSTEM_PROMPT,
+            userPrompt,
+          });
+        } catch (e) {
+          console.error(
+            chalk.red(
+              `Cluster ${cluster.signatureHash}: Gemini call failed (${e.message}). Halting; ${appended} cluster(s) already appended in this run.`
+            )
+          );
+          if (appended > 0) fs.writeFileSync(locked.path, writeBuffer);
+          exitCode = 2;
+          break;
+        }
+        let draft;
+        try {
+          draft = parseDraft(raw);
+        } catch (e) {
+          console.error(
+            chalk.red(
+              `Cluster ${cluster.signatureHash}: synthesizer response was malformed (${e.message}). Halting.`
+            )
+          );
+          if (appended > 0) fs.writeFileSync(locked.path, writeBuffer);
+          exitCode = 2;
+          break;
+        }
+        const section = formatSection(cluster, draft, today);
+        writeBuffer += section;
+        appended += 1;
+        console.log(
+          chalk.green(`  ✓ drafted ${cluster.signatureHash} — ${draft.name}`)
+        );
+      }
+
+      if (exitCode === 0 && appended > 0) {
+        fs.writeFileSync(locked.path, writeBuffer);
+        console.log();
+        console.log(
+          chalk.bold(
+            `Appended ${appended} synthesis section(s) to ${path.relative(cwd, locked.path)}.`
+          )
+        );
+        console.log(
+          chalk.dim(
+            'These are auto-drafts. Review each, refine the wording, and confirm the recommended fix before treating as load-bearing.'
+          )
+        );
+      }
+    }
+  } finally {
+    try {
+      fs.closeSync(lockFd);
+    } catch {
+      // intentionally swallowed — releasing the lock is best-effort
+    }
+    try {
+      fs.unlinkSync(lockPath);
+    } catch {
+      // intentionally swallowed — releasing the lock is best-effort
+    }
+  }
+
+  process.exit(exitCode);
 }
 
 // Exported for tests.
