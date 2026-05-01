@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
+import yaml from 'js-yaml';
 import {
   buildContext,
   detectStack,
@@ -27,12 +28,17 @@ const CANONICAL_REVIEWER_PERSONAS = new Set([
 function isSpecializedMode(cwd) {
   const cfg = path.join(cwd, 'harness.yml');
   if (!fs.existsSync(cfg)) return false;
-  const yaml = fs.readFileSync(cfg, 'utf8');
-  // Tiny YAML reader: look for `specialized: true` under a `council:` block.
-  // Keeps us dep-free; if the YAML gets more complex, swap in a parser.
-  const m = yaml.match(/^council:\s*\n((?:[ \t]+.+\n?)+)/m);
-  if (!m) return false;
-  return /^[ \t]+specialized:\s*true\b/m.test(m[1]);
+  // Use js-yaml. The previous hand-rolled regex parser had two real bugs
+  // caught by council R1 PR #4: (1) ReDoS susceptibility via NFA ambiguity
+  // in `(?:[ \t]+.+\n?)+` (`.+` overlaps `[ \t]+`); (2) only literal `true`
+  // matched — yaml.load handles all valid boolean variants (True / yes / on).
+  let parsed;
+  try {
+    parsed = yaml.load(fs.readFileSync(cfg, 'utf8'));
+  } catch {
+    return false;
+  }
+  return parsed && parsed.council && parsed.council.specialized === true;
 }
 
 // Read-only drift report. Compares each canonical template file against the

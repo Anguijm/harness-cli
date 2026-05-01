@@ -161,6 +161,61 @@ function expectFile(dir, rel) {
   }
 }
 
+// Test 12: lead-architect.md is still required in specialized mode.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    // Set specialized: true.
+    const yamlPath = path.join(dir, 'harness.yml');
+    let yaml = fs.readFileSync(yamlPath, 'utf8');
+    yaml = yaml.replace(/^council:/m, 'council:\n  specialized: true');
+    fs.writeFileSync(yamlPath, yaml);
+
+    // Delete lead-architect.md (the synthesizer — required even in specialized).
+    fs.unlinkSync(path.join(dir, '.harness/council/lead-architect.md'));
+
+    // check should fail because lead-architect is missing.
+    let out = '';
+    let exitCode = 0;
+    try {
+      out = run(`node "${CLI}" check`, dir);
+    } catch (e) {
+      out = (e.stdout || '') + (e.stderr || '');
+      exitCode = e.status || 1;
+    }
+    assert(exitCode === 1, 'check should exit 1 when lead-architect.md missing');
+    assert(out.includes('lead-architect.md'), 'expected lead-architect in missing list');
+    console.log('PASS: specialized mode still requires lead-architect.md');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 13: specialized mode accepts YAML boolean variants (True, yes, on).
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    // Delete canonical reviewer personas to make the missing/skipped distinction observable.
+    for (const f of ['accessibility.md', 'architecture.md', 'bugs.md', 'cost.md',
+                     'maintainability.md', 'product.md', 'security.md']) {
+      fs.unlinkSync(path.join(dir, '.harness/council/', f));
+    }
+    const yamlPath = path.join(dir, 'harness.yml');
+    // Use uppercase True — js-yaml treats this as boolean true.
+    let yaml = fs.readFileSync(yamlPath, 'utf8');
+    yaml = yaml.replace(/^council:/m, 'council:\n  specialized: True');
+    fs.writeFileSync(yamlPath, yaml);
+
+    const out = run(`node "${CLI}" check`, dir);
+    assert(out.includes('missing  0'), `expected 0 missing with specialized: True (uppercase), got: ${out}`);
+    console.log('PASS: specialized mode accepts YAML boolean variants');
+  } finally {
+    cleanup(dir);
+  }
+}
+
 // Test 11: harness check respects council.specialized: true in harness.yml —
 // canonical reviewer personas are skipped, lead-architect still required.
 {

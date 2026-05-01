@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
+import yaml from 'js-yaml';
 import { findChunkBySlug, extractLinks } from '../lib/links.js';
 
 // Queryable memory retrieval. Surfaces past entries from learnings.md,
@@ -141,19 +142,19 @@ function loadSources(cwd, sources) {
 
 function loadConfiguredSources(cwd) {
   // Read harness.yml for a `recall.sources` list, if present.
-  // Tiny YAML parser: just look for the recall block. Keeps us dep-free.
+  // js-yaml replaces a hand-rolled regex parser that had ReDoS susceptibility
+  // (caught alongside the same defect in check.js by council R1 PR #4).
   const cfg = path.join(cwd, 'harness.yml');
   if (!fs.existsSync(cfg)) return DEFAULT_SOURCES;
-  const yaml = fs.readFileSync(cfg, 'utf8');
-  const m = yaml.match(/^recall:\s*\n((?:[ \t]+.+\n?)+)/m);
-  if (!m) return DEFAULT_SOURCES;
-  const block = m[1];
-  const sourcesMatch = block.match(/sources:\s*\n((?:[ \t]+-\s+.+\n?)+)/);
-  if (!sourcesMatch) return DEFAULT_SOURCES;
-  const items = [...sourcesMatch[1].matchAll(/^[ \t]+-\s+(.+?)\s*$/gm)].map(
-    (m) => m[1].replace(/^['"]|['"]$/g, '')
-  );
-  return items.length ? items : DEFAULT_SOURCES;
+  let parsed;
+  try {
+    parsed = yaml.load(fs.readFileSync(cfg, 'utf8'));
+  } catch {
+    return DEFAULT_SOURCES;
+  }
+  const sources = parsed && parsed.recall && parsed.recall.sources;
+  if (!Array.isArray(sources) || sources.length === 0) return DEFAULT_SOURCES;
+  return sources;
 }
 
 function formatExcerpt(chunk, maxLines = 12) {
