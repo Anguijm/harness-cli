@@ -149,7 +149,16 @@ function loadConfiguredSources(cwd) {
   let parsed;
   try {
     parsed = yaml.load(fs.readFileSync(cfg, 'utf8'));
-  } catch {
+  } catch (e) {
+    // Bugs reviewer R2 PR #4: don't silently fall back to defaults when
+    // harness.yml is unparseable — the user's `recall.sources` config is
+    // being ignored, and they should know. recall is a read-only command,
+    // so warn loudly but don't abort (defaults still produce useful output).
+    console.error(
+      chalk.yellow(
+        `harness.yml could not be parsed (${e.message.split('\n')[0]}); falling back to default recall sources.`
+      )
+    );
     return DEFAULT_SOURCES;
   }
   const sources = parsed && parsed.recall && parsed.recall.sources;

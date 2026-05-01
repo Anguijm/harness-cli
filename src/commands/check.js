@@ -35,8 +35,18 @@ function isSpecializedMode(cwd) {
   let parsed;
   try {
     parsed = yaml.load(fs.readFileSync(cfg, 'utf8'));
-  } catch {
-    return false;
+  } catch (e) {
+    // Bugs reviewer R2 PR #4: malformed harness.yml should be a fatal
+    // error in `harness check`, not silent fallback to default behavior.
+    // Otherwise a typo causes drift-check to start reporting canonical
+    // personas as missing with no indication the config is the problem.
+    console.error(
+      chalk.red(`harness.yml could not be parsed: ${e.message}`)
+    );
+    console.error(
+      chalk.dim(`  Path: ${cfg}\n  Fix the YAML syntax error and re-run.`)
+    );
+    process.exit(2);
   }
   return parsed && parsed.council && parsed.council.specialized === true;
 }

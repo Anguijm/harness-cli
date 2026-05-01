@@ -161,6 +161,36 @@ function expectFile(dir, rel) {
   }
 }
 
+// Test 14: malformed harness.yml is a fatal error for `harness check`,
+// not a silent fallback to default behavior.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    // Corrupt harness.yml with a YAML syntax error.
+    fs.writeFileSync(
+      path.join(dir, 'harness.yml'),
+      'council:\n  specialized: [unbalanced\n'
+    );
+    let out = '';
+    let exitCode = 0;
+    try {
+      out = run(`node "${CLI}" check`, dir);
+    } catch (e) {
+      out = (e.stdout || '') + (e.stderr || '');
+      exitCode = e.status || 1;
+    }
+    assert(exitCode !== 0, 'check should exit non-zero on malformed harness.yml');
+    assert(
+      out.includes('harness.yml could not be parsed'),
+      'expected explicit parse-error message'
+    );
+    console.log('PASS: malformed harness.yml is fatal for `harness check`');
+  } finally {
+    cleanup(dir);
+  }
+}
+
 // Test 12: lead-architect.md is still required in specialized mode.
 {
   const dir = makeTempRepo('node-ts');
