@@ -28,9 +28,30 @@ import {
   DUPLICATE_SIGNAL_THRESHOLD,
 } from '../lib/failures.js';
 
+// Cheaper / faster Gemini variant — synthesis is short and stateless and
+// doesn't need pro-tier reasoning. Override per repo via harness.yml
+// `synthesize.model`.
 const DEFAULT_MODEL = 'gemini-2.5-flash';
+// Cost guardrail. Caps API calls per --apply run on a repo with a large
+// backlog of un-synthesized clusters. Override per repo via harness.yml
+// `synthesize.max`.
 const DEFAULT_MAX_CLUSTERS = 5;
+// Upstream of every Gemini call. The model name and `:generateContent`
+// suffix are appended at call time. The API key is sent via header (see
+// callGeminiDefault), never in the query string, to keep it out of
+// upstream proxy / shell-history logs.
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+// Number of contributing failures to print as a sample under each cluster
+// in dry-run output. Larger clusters get a "... and N more" elision.
+// Keeps the dry-run readable when a repo has clusters of 20+ failures.
+const DRY_RUN_SAMPLE_FAILURES = 5;
+// Exit code returned for every config / runtime / API error path
+// (missing key, lock held, malformed model response, transport error,
+// unparseable harness.yml when it gates behavior). Distinguishes our
+// failures (2) from a clean "nothing to do" success (0) and the rare
+// caller-mistake exits (1, e.g. unknown --cluster hash). Shell scripts
+// can branch on `case $? in 0) … 1) … 2) …`.
+const EXIT_CONFIG_OR_RUNTIME_ERROR = 2;
 
 const SYSTEM_PROMPT = `You are a synthesis writer for a development-harness "learnings" file.
 
@@ -144,8 +165,14 @@ ${wrapped}${contextBlock}
 
 // Default Gemini caller — direct fetch to the REST API. No SDK dep.
 // Test seam: callers can override via the `geminiFetch` parameter.
+//
+// API key is sent in the `x-goog-api-key` header, NEVER as a `?key=`
+// query parameter. URL-embedded secrets leak into upstream proxy logs,
+// CDN access logs, browser history, and shell history; the header form
+// is the documented Google-supported alternative. (Council PR #6 R2
+// flagged the original query-param form as a BLOCK.)
 async function callGeminiDefault({ model, apiKey, systemPrompt, userPrompt }) {
-  const url = `${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const url = `${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:generateContent`;
   const body = {
     systemInstruction: { parts: [{ text: systemPrompt }] },
     contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
@@ -158,7 +185,10 @@ async function callGeminiDefault({ model, apiKey, systemPrompt, userPrompt }) {
   };
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -351,12 +381,16 @@ export async function synthesize(options, deps = {}) {
     console.log(
       `  ${chalk.cyan(c.signatureHash)}  ${c.failures.length}× ${chalk.dim(c.signature)}`
     );
-    for (const f of c.failures.slice(0, 5)) {
+    for (const f of c.failures.slice(0, DRY_RUN_SAMPLE_FAILURES)) {
       const tag = f.parsed.fix_sha || f.parsed.ts || `line ${f.lineNo}`;
       console.log(chalk.dim(`     - ${tag}`));
     }
-    if (c.failures.length > 5) {
-      console.log(chalk.dim(`     ... and ${c.failures.length - 5} more`));
+    if (c.failures.length > DRY_RUN_SAMPLE_FAILURES) {
+      console.log(
+        chalk.dim(
+          `     ... and ${c.failures.length - DRY_RUN_SAMPLE_FAILURES} more`
+        )
+      );
     }
   }
   console.log();
@@ -377,7 +411,7 @@ export async function synthesize(options, deps = {}) {
         'GEMINI_API_KEY not set. `harness synthesize --apply` requires it. (Read-only dry-run still works without a key.)'
       )
     );
-    process.exit(2);
+    process.exit(EXIT_CONFIG_OR_RUNTIME_ERROR);
   }
 
   // Exclusive lock around the read-modify-write on learnings.md. Without
@@ -406,7 +440,7 @@ export async function synthesize(options, deps = {}) {
           '  If no other run is in progress, the previous run crashed before releasing — delete the lock file and retry.'
         )
       );
-      process.exit(2);
+      process.exit(EXIT_CONFIG_OR_RUNTIME_ERROR);
     }
     throw e;
   }
@@ -451,7 +485,7 @@ export async function synthesize(options, deps = {}) {
             )
           );
           if (appended > 0) fs.writeFileSync(locked.path, writeBuffer);
-          exitCode = 2;
+          exitCode = EXIT_CONFIG_OR_RUNTIME_ERROR;
           break;
         }
         let draft;
@@ -464,7 +498,7 @@ export async function synthesize(options, deps = {}) {
             )
           );
           if (appended > 0) fs.writeFileSync(locked.path, writeBuffer);
-          exitCode = 2;
+          exitCode = EXIT_CONFIG_OR_RUNTIME_ERROR;
           break;
         }
         const section = formatSection(cluster, draft, today);
