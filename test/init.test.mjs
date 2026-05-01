@@ -169,7 +169,7 @@ function expectFile(dir, rel) {
     // Set specialized: true.
     const yamlPath = path.join(dir, 'harness.yml');
     let yaml = fs.readFileSync(yamlPath, 'utf8');
-    yaml = yaml.replace(/^council:/m, 'council:\n  specialized: true');
+    yaml = yaml.replace(/^( *)specialized: false\b/m, '$1specialized: true');
     fs.writeFileSync(yamlPath, yaml);
 
     // Delete lead-architect.md (the synthesizer — required even in specialized).
@@ -205,7 +205,7 @@ function expectFile(dir, rel) {
     const yamlPath = path.join(dir, 'harness.yml');
     // Use uppercase True — js-yaml treats this as boolean true.
     let yaml = fs.readFileSync(yamlPath, 'utf8');
-    yaml = yaml.replace(/^council:/m, 'council:\n  specialized: True');
+    yaml = yaml.replace(/^( *)specialized: false\b/m, '$1specialized: True');
     fs.writeFileSync(yamlPath, yaml);
 
     const out = run(`node "${CLI}" check`, dir);
@@ -242,7 +242,7 @@ function expectFile(dir, rel) {
     // Set specialized: true in harness.yml.
     const yamlPath = path.join(dir, 'harness.yml');
     let yaml = fs.readFileSync(yamlPath, 'utf8');
-    yaml = yaml.replace(/^council:/m, 'council:\n  specialized: true');
+    yaml = yaml.replace(/^( *)specialized: false\b/m, '$1specialized: true');
     fs.writeFileSync(yamlPath, yaml);
 
     // Now check should skip all 7 and exit 0.
