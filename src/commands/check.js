@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
+import yaml from 'js-yaml';
 import {
   buildContext,
   detectStack,
@@ -8,14 +9,59 @@ import {
   readTemplate,
 } from '../lib/template.js';
 
+// Canonical reviewer personas — the 7 angle reviewers that the harness ships
+// with by default. Specialized-personas repos (council.specialized: true in
+// harness.yml) replace these with domain-specific reviewers (e.g., sportsdata
+// uses data-quality / statistical-validity / etc.) and skip the canonical 7
+// in drift checks. lead-architect.md and council/README.md are NOT in this
+// list — they're required even in specialized mode.
+const CANONICAL_REVIEWER_PERSONAS = new Set([
+  '.harness/council/accessibility.md',
+  '.harness/council/architecture.md',
+  '.harness/council/bugs.md',
+  '.harness/council/cost.md',
+  '.harness/council/maintainability.md',
+  '.harness/council/product.md',
+  '.harness/council/security.md',
+]);
+
+function isSpecializedMode(cwd) {
+  const cfg = path.join(cwd, 'harness.yml');
+  if (!fs.existsSync(cfg)) return false;
+  // Use js-yaml. The previous hand-rolled regex parser had two real bugs
+  // caught by council R1 PR #4: (1) ReDoS susceptibility via NFA ambiguity
+  // in `(?:[ \t]+.+\n?)+` (`.+` overlaps `[ \t]+`); (2) only literal `true`
+  // matched — yaml.load handles all valid boolean variants (True / yes / on).
+  let parsed;
+  try {
+    parsed = yaml.load(fs.readFileSync(cfg, 'utf8'));
+  } catch (e) {
+    // Bugs reviewer R2 PR #4: malformed harness.yml should be a fatal
+    // error in `harness check`, not silent fallback to default behavior.
+    // Otherwise a typo causes drift-check to start reporting canonical
+    // personas as missing with no indication the config is the problem.
+    console.error(
+      chalk.red(`harness.yml could not be parsed: ${e.message}`)
+    );
+    console.error(
+      chalk.dim(`  Path: ${cfg}\n  Fix the YAML syntax error and re-run.`)
+    );
+    process.exit(2);
+  }
+  return parsed && parsed.council && parsed.council.specialized === true;
+}
+
 // Read-only drift report. Compares each canonical template file against the
 // repo's copy and prints a status per file:
 //   missing  — file is in template but not in repo
 //   ok       — content matches the canonical template (after placeholder sub)
 //   modified — content differs (user-customized, or template has updated)
+//   skipped  — repo is in specialized mode and this is a canonical reviewer
+//              persona that's been deliberately replaced
 //
-// Exit 0 if no missing files. Exit 1 if any missing. Modified files do not
-// fail — repos are expected to specialize personas and the security checklist.
+// Exit 0 if no missing files (excluding skipped). Exit 1 if any missing.
+// Modified files do not fail — repos are expected to specialize personas
+// and the security checklist.
 export async function check(options) {
   const cwd = process.cwd();
   const stack = options.stack === 'auto' || !options.stack ? detectStack(cwd) : options.stack;
@@ -27,11 +73,21 @@ export async function check(options) {
 
   const ctx = buildContext({ cwd, stack });
   const plan = planFiles(stack);
+  const specialized = isSpecializedMode(cwd);
 
-  const counts = { missing: 0, ok: 0, modified: 0 };
-  const lists = { missing: [], modified: [] };
+  const counts = { missing: 0, ok: 0, modified: 0, skipped: 0 };
+  const lists = { missing: [], modified: [], skipped: [] };
 
   for (const [tplRelPath, targetRelPath] of plan) {
+    // Specialized mode: skip canonical reviewer personas. Their replacements
+    // (e.g. data-quality.md) live alongside; we don't enforce the canonical
+    // set when the repo has declared it uses its own.
+    if (specialized && CANONICAL_REVIEWER_PERSONAS.has(targetRelPath)) {
+      counts.skipped += 1;
+      lists.skipped.push(targetRelPath);
+      continue;
+    }
+
     const targetAbs = path.join(cwd, targetRelPath);
     let canonical;
     try {
@@ -56,11 +112,14 @@ export async function check(options) {
     }
   }
 
-  console.log(chalk.bold(`harness drift report — ${ctx.PROJECT_NAME} (stack: ${stack})`));
+  console.log(chalk.bold(`harness drift report — ${ctx.PROJECT_NAME} (stack: ${stack}${specialized ? ', specialized personas' : ''})`));
   console.log();
   console.log(`  ${chalk.green('ok      ')} ${counts.ok}`);
   console.log(`  ${chalk.yellow('modified')} ${counts.modified}`);
   console.log(`  ${chalk.red('missing ')} ${counts.missing}`);
+  if (specialized) {
+    console.log(`  ${chalk.dim('skipped ')} ${counts.skipped} ${chalk.dim('(canonical reviewer personas — repo declared specialized)')}`);
+  }
   console.log();
 
   if (lists.missing.length) {
@@ -71,6 +130,11 @@ export async function check(options) {
   if (lists.modified.length && options.verbose) {
     console.log(chalk.yellow('Modified files (likely customized — review manually if needed):'));
     for (const f of lists.modified) console.log(chalk.dim(`  - ${f}`));
+    console.log();
+  }
+  if (lists.skipped.length && options.verbose) {
+    console.log(chalk.dim('Skipped (specialized mode):'));
+    for (const f of lists.skipped) console.log(chalk.dim(`  - ${f}`));
     console.log();
   }
 

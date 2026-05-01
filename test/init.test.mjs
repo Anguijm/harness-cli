@@ -161,6 +161,132 @@ function expectFile(dir, rel) {
   }
 }
 
+// Test 14: malformed harness.yml is a fatal error for `harness check`,
+// not a silent fallback to default behavior.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    // Corrupt harness.yml with a YAML syntax error.
+    fs.writeFileSync(
+      path.join(dir, 'harness.yml'),
+      'council:\n  specialized: [unbalanced\n'
+    );
+    let out = '';
+    let exitCode = 0;
+    try {
+      out = run(`node "${CLI}" check`, dir);
+    } catch (e) {
+      out = (e.stdout || '') + (e.stderr || '');
+      exitCode = e.status || 1;
+    }
+    assert(exitCode !== 0, 'check should exit non-zero on malformed harness.yml');
+    assert(
+      out.includes('harness.yml could not be parsed'),
+      'expected explicit parse-error message'
+    );
+    console.log('PASS: malformed harness.yml is fatal for `harness check`');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 12: lead-architect.md is still required in specialized mode.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    // Set specialized: true.
+    const yamlPath = path.join(dir, 'harness.yml');
+    let yaml = fs.readFileSync(yamlPath, 'utf8');
+    yaml = yaml.replace(/^( *)specialized: false\b/m, '$1specialized: true');
+    fs.writeFileSync(yamlPath, yaml);
+
+    // Delete lead-architect.md (the synthesizer — required even in specialized).
+    fs.unlinkSync(path.join(dir, '.harness/council/lead-architect.md'));
+
+    // check should fail because lead-architect is missing.
+    let out = '';
+    let exitCode = 0;
+    try {
+      out = run(`node "${CLI}" check`, dir);
+    } catch (e) {
+      out = (e.stdout || '') + (e.stderr || '');
+      exitCode = e.status || 1;
+    }
+    assert(exitCode === 1, 'check should exit 1 when lead-architect.md missing');
+    assert(out.includes('lead-architect.md'), 'expected lead-architect in missing list');
+    console.log('PASS: specialized mode still requires lead-architect.md');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 13: specialized mode accepts YAML boolean variants (True, yes, on).
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    // Delete canonical reviewer personas to make the missing/skipped distinction observable.
+    for (const f of ['accessibility.md', 'architecture.md', 'bugs.md', 'cost.md',
+                     'maintainability.md', 'product.md', 'security.md']) {
+      fs.unlinkSync(path.join(dir, '.harness/council/', f));
+    }
+    const yamlPath = path.join(dir, 'harness.yml');
+    // Use uppercase True — js-yaml treats this as boolean true.
+    let yaml = fs.readFileSync(yamlPath, 'utf8');
+    yaml = yaml.replace(/^( *)specialized: false\b/m, '$1specialized: True');
+    fs.writeFileSync(yamlPath, yaml);
+
+    const out = run(`node "${CLI}" check`, dir);
+    assert(out.includes('missing  0'), `expected 0 missing with specialized: True (uppercase), got: ${out}`);
+    console.log('PASS: specialized mode accepts YAML boolean variants');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 11: harness check respects council.specialized: true in harness.yml —
+// canonical reviewer personas are skipped, lead-architect still required.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    // Delete the canonical reviewer personas (simulating a specialized repo).
+    for (const f of [
+      'accessibility.md', 'architecture.md', 'bugs.md', 'cost.md',
+      'maintainability.md', 'product.md', 'security.md',
+    ]) {
+      fs.unlinkSync(path.join(dir, '.harness/council/', f));
+    }
+
+    // Without specialized mode → check should report 7 missing.
+    let beforeOut = '';
+    try {
+      beforeOut = run(`node "${CLI}" check`, dir);
+    } catch (e) {
+      beforeOut = (e.stdout || '') + (e.stderr || '');
+    }
+    assert(beforeOut.includes('missing  7'), `expected 7 missing, got: ${beforeOut}`);
+
+    // Set specialized: true in harness.yml.
+    const yamlPath = path.join(dir, 'harness.yml');
+    let yaml = fs.readFileSync(yamlPath, 'utf8');
+    yaml = yaml.replace(/^( *)specialized: false\b/m, '$1specialized: true');
+    fs.writeFileSync(yamlPath, yaml);
+
+    // Now check should skip all 7 and exit 0.
+    const afterOut = run(`node "${CLI}" check`, dir);
+    assert(afterOut.includes('missing  0'), `expected 0 missing after specialized=true, got: ${afterOut}`);
+    assert(afterOut.includes('skipped'), 'expected skipped count in output');
+    assert(afterOut.includes('specialized'), 'expected specialized label in header');
+
+    console.log('PASS: harness check respects council.specialized: true');
+  } finally {
+    cleanup(dir);
+  }
+}
+
 // Test 10: ambiguous [[link]] — lint warns, recall does not silently pick.
 {
   const dir = makeTempRepo('node-ts');
