@@ -113,6 +113,10 @@ function loadVectorConfig(cwd) {
 }
 
 function formatExcerpt(chunk, maxLines = 12) {
+  // 12 lines is the default excerpt length: enough to convey the gist
+  // of a learnings.md section header + first KEEP/IMPROVE/INSIGHT block,
+  // without filling a typical terminal viewport when several chunks
+  // surface at once.
   const lines = chunk.text.split('\n');
   if (lines.length <= maxLines) return chunk.text;
   return lines.slice(0, maxLines).join('\n') + `\n... (${lines.length - maxLines} more lines)`;

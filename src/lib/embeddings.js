@@ -85,6 +85,10 @@ async function callGeminiEmbedDefault({ text, apiKey, model, fetchImpl }) {
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => '<unreadable>');
+    // Cap at 300 chars: long Google API error bodies (HTML pages on
+    // outages, multi-paragraph quota explanations) flood the console
+    // and bury the status code. The first 300 chars carry the actual
+    // error code and message in every observed shape.
     throw new Error(
       `Gemini embed API ${res.status} ${res.statusText}: ${errText.slice(0, 300)}`
     );
@@ -93,6 +97,7 @@ async function callGeminiEmbedDefault({ text, apiKey, model, fetchImpl }) {
   const vector = json?.embedding?.values;
   if (!Array.isArray(vector) || vector.length === 0 || !vector.every((v) => typeof v === 'number')) {
     throw new Error(
+      // Same 300-char cap as above — keep error noise bounded.
       `Gemini embed returned no vector. Response head: ${JSON.stringify(json).slice(0, 300)}`
     );
   }
