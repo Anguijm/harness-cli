@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
+import { findChunkBySlug, extractLinks } from '../lib/links.js';
 
 // Queryable memory retrieval. Surfaces past entries from learnings.md,
 // yolo_log.jsonl, last_council.md, failures.jsonl etc. that match the
@@ -30,47 +31,15 @@ const STOP = new Set([
   'what', 'why', 'who', 'do', 'does', 'should', 'would', 'could',
 ]);
 
-// Wiki-style cross-references: [[some text]] points at another section
-// in learnings.md. Resolution is by slug-normalized header match (date
-// prefix stripped). Recall follows links one hop deep at half score so
-// linked context surfaces alongside direct matches.
-const LINK_RE = /\[\[([^\]]+)\]\]/g;
-
-function normalizeSlug(s) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-}
-
-function chunkHeaderSlug(chunk) {
-  if (!chunk.text) return '';
-  const firstLine = chunk.text.split('\n')[0] || '';
-  const stripped = firstLine
-    .replace(/^##\s+/, '')
-    .replace(/^\d{4}-\d{2}-\d{2}\s*[—–-]?\s*/, '');
-  return normalizeSlug(stripped);
-}
-
-function findChunkBySlug(chunks, linkText) {
-  const targetSlug = normalizeSlug(linkText);
-  if (!targetSlug) return null;
-  for (const chunk of chunks) {
-    if (chunkHeaderSlug(chunk) === targetSlug) return chunk;
-  }
-  for (const chunk of chunks) {
-    const slug = chunkHeaderSlug(chunk);
-    if (slug.startsWith(targetSlug) || targetSlug.startsWith(slug)) return chunk;
-  }
-  return null;
-}
-
-function extractLinks(text) {
-  const links = [];
-  let m;
-  LINK_RE.lastIndex = 0;
-  while ((m = LINK_RE.exec(text)) !== null) {
-    links.push(m[1].trim());
-  }
-  return links;
-}
+// Wiki-style cross-references and slug resolution are in src/lib/links.js
+// (shared with harness lint).
+//
+// Score multiplier for chunks reached via [[link]]: 0.5. Heuristic chosen
+// to keep linked context relevant but subordinate to direct matches.
+// Increasing toward 1.0 lets linked items displace more relevant direct
+// hits; below ~0.25 they don't surface meaningfully when direct matches
+// also exist. (Documented per maintainability remediation, PR #3 R1.)
+const LINKED_SCORE_MULTIPLIER = 0.5;
 
 function tokenize(s) {
   return (s.toLowerCase().match(/[a-z][a-z0-9_-]+/g) || []).filter(
@@ -218,28 +187,39 @@ export async function recall(query, options) {
 
   const scored = chunks
     .map((c) => ({ chunk: c, score: score(c, queryTokens), via: null }))
-    .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score);
+    .filter((x) => x.score > 0);
 
-  const limit = options.limit || 5;
-  const directHits = scored.slice(0, limit);
-
-  // Follow [[wiki-style]] cross-references one hop deep at half score —
-  // linked context surfaces alongside direct matches without dominating.
-  const seen = new Set(directHits.map((h) => h.chunk.text));
+  // Follow [[wiki-style]] cross-references one hop deep. Linked chunks
+  // are added to the candidate pool at half score, then the combined
+  // pool is re-sorted and sliced to `limit`. This means linked context
+  // can replace lower-scoring direct hits when more relevant, but
+  // never extends the result count past the user's limit. (Bugs
+  // reviewer R1 PR #3: previous behavior expanded the limit AND
+  // skipped re-sort, both incorrect.)
+  const seen = new Set(scored.map((s) => s.chunk.text));
   const linked = [];
-  for (const hit of directHits) {
+  for (const hit of scored) {
     const links = extractLinks(hit.chunk.text);
     for (const linkText of links) {
-      const target = findChunkBySlug(chunks, linkText);
+      const { chunk: target } = findChunkBySlug(chunks, linkText);
       if (!target) continue;
       if (seen.has(target.text)) continue;
       seen.add(target.text);
-      linked.push({ chunk: target, score: hit.score * 0.5, via: linkText });
+      linked.push({
+        chunk: target,
+        score: hit.score * LINKED_SCORE_MULTIPLIER,
+        via: linkText,
+      });
     }
   }
 
-  const top = [...directHits, ...linked].slice(0, limit + linked.length);
+  const limit = options.limit || 5;
+  const top = [...scored, ...linked]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+
+  const directInTop = top.filter((t) => !t.via).length;
+  const linkedInTop = top.filter((t) => t.via).length;
 
   if (top.length === 0) {
     console.log(chalk.dim(`No matches in ${chunks.length} chunks across ${sources.length} sources.`));
@@ -247,7 +227,7 @@ export async function recall(query, options) {
   }
 
   console.log(`# Recall: "${query}"`);
-  console.log(`_${directHits.length} direct match${directHits.length === 1 ? '' : 'es'}, ${linked.length} linked from those (scanned ${chunks.length} chunks total)_`);
+  console.log(`_${directInTop} direct match${directInTop === 1 ? '' : 'es'}, ${linkedInTop} linked from those (scanned ${chunks.length} chunks total, limit ${limit})_`);
   console.log();
 
   for (const { chunk, score, via } of top) {

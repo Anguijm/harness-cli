@@ -22,6 +22,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
+import { findChunkBySlug, extractLinks } from '../lib/links.js';
 
 const REQUIRED_FAILURE_FIELDS = [
   'ts',
@@ -46,47 +47,9 @@ const VALID_FAILURE_CLASSES = new Set([
 // \b sits between the dot and `g` and cuts the dot out of the match.
 const PATH_RE = /(?<![\w./-])((?:\.harness|\.claude|\.github|\.husky|src|configs?|scripts|tests?|data|docs|public|app|lib|components)\/[\w./-]+|[\w./-]+\.(?:tsx?|jsx?|py|md|ya?ml|json|toml|sh))(?![\w/-])/g;
 
-// Wiki-style cross-reference: [[some text]] points at another learnings.md
-// section. Resolution is by slug-normalized header match (date prefix
-// stripped) — see findSection below.
-const LINK_RE = /\[\[([^\]]+)\]\]/g;
-
-function normalizeSlug(s) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-}
-
-function chunkHeaderSlug(chunk) {
-  // Strip "## " prefix and any leading "YYYY-MM-DD — " date marker.
-  const stripped = chunk.header
-    .replace(/^##\s+/, '')
-    .replace(/^\d{4}-\d{2}-\d{2}\s*[—–-]?\s*/, '');
-  return normalizeSlug(stripped);
-}
-
-function findSection(chunks, linkText) {
-  const targetSlug = normalizeSlug(linkText);
-  if (!targetSlug) return null;
-  // Try exact match first.
-  for (const chunk of chunks) {
-    if (chunkHeaderSlug(chunk) === targetSlug) return chunk;
-  }
-  // Then prefix match (helpful for shortened links).
-  for (const chunk of chunks) {
-    const slug = chunkHeaderSlug(chunk);
-    if (slug.startsWith(targetSlug) || targetSlug.startsWith(slug)) return chunk;
-  }
-  return null;
-}
-
-function extractLinks(text) {
-  const links = [];
-  let m;
-  LINK_RE.lastIndex = 0;
-  while ((m = LINK_RE.exec(text)) !== null) {
-    links.push(m[1].trim());
-  }
-  return links;
-}
+// Wiki-style cross-references and slug resolution live in src/lib/links.js
+// (shared with harness recall — the council called out the duplication on
+// PR #3 R1).
 
 const SHA_RE = /\b([0-9a-f]{7,40})\b/g; // git short-sha or full
 
@@ -333,20 +296,33 @@ function checkBrokenLinks(learnings, failureLines) {
   const issues = [];
   const chunks = learnings ? chunkLearnings(learnings.content) : [];
 
+  function checkLink(link, source, line) {
+    const { chunk, ambiguous } = findChunkBySlug(chunks, link);
+    if (!chunk) {
+      issues.push({
+        severity: 'warning',
+        check: 'broken_links',
+        source,
+        line,
+        message: `[[${link}]] doesn't resolve to any section in learnings.md`,
+      });
+    } else if (ambiguous) {
+      issues.push({
+        severity: 'warning',
+        check: 'ambiguous_links',
+        source,
+        line,
+        message: `[[${link}]] is ambiguous — multiple sections match its prefix; resolution picks the first which may be wrong`,
+      });
+    }
+  }
+
   // Links inside learnings.md sections.
   if (learnings) {
     for (const chunk of chunks) {
       const text = chunk.body.map((l) => l.line).join('\n');
       for (const link of extractLinks(text)) {
-        if (!findSection(chunks, link)) {
-          issues.push({
-            severity: 'warning',
-            check: 'broken_links',
-            source: learnings.path,
-            line: chunk.headerLineNo,
-            message: `[[${link}]] doesn't resolve to any section in learnings.md`,
-          });
-        }
+        checkLink(link, learnings.path, chunk.headerLineNo);
       }
     }
   }
@@ -359,15 +335,7 @@ function checkBrokenLinks(learnings, failureLines) {
       ...((f.parsed.links || [])),
     ].join(' ');
     for (const link of extractLinks(candidateText)) {
-      if (!findSection(chunks, link)) {
-        issues.push({
-          severity: 'warning',
-          check: 'broken_links',
-          source: '.harness/failures.jsonl',
-          line: f.lineNo,
-          message: `[[${link}]] doesn't resolve to any section in learnings.md`,
-        });
-      }
+      checkLink(link, '.harness/failures.jsonl', f.lineNo);
     }
   }
 
