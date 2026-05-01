@@ -11,6 +11,7 @@ import { recipe } from './commands/recipe.js';
 import { learn } from './commands/learn.js';
 import { synthesize } from './commands/synthesize.js';
 import { reindex } from './commands/reindex.js';
+import { research } from './commands/research.js';
 import chalk from 'chalk';
 
 const program = new Command();
@@ -59,6 +60,15 @@ program
   .option('--dry-run', 'Report what would change without calling the embedding API')
   .option('-m, --model <name>', 'Override the embedding model (default text-embedding-004)')
   .action(reindex);
+
+program
+  .command('research <description>')
+  .description('Run the active reviewer panel in parallel against a feature description; writes a ## Research block to .harness/active_plan.md')
+  .option('--dry-run', 'Print the persona list + context preview without calling Gemini')
+  .option('--no-write', 'Print the Research block to stdout instead of writing to active_plan.md')
+  .option('--max-personas <n>', 'Cap personas per run (default = all active)', (v) => parseInt(v, 10))
+  .option('-m, --model <name>', 'Override the Gemini model (default gemini-2.5-pro)')
+  .action(research);
 
 program
   .command('lint')
