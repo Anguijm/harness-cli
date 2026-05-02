@@ -19,7 +19,7 @@ const program = new Command();
 program
   .name('harness')
   .description('AI development harness — plan, council, build methodology')
-  .version('0.2.0');
+  .version('0.3.0');
 
 program
   .command('init')
