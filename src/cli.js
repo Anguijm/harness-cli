@@ -19,7 +19,10 @@ const program = new Command();
 program
   .name('harness')
   .description('AI development harness — plan, council, build methodology')
-  .version('0.2.0');
+  // Keep this string in sync with the "version" field in package.json.
+  // Bumped in lockstep on every release-bump PR; mismatch means one was
+  // edited but the other wasn't. (Council R1 PR #9 maintainability ask.)
+  .version('0.3.0');
 
 program
   .command('init')
