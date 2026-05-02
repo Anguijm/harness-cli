@@ -12,6 +12,11 @@ Specialize this persona for the project: replace the bullet points below with th
 - **Migration safety** — changes that cascade to production data or external systems need dry-run paths and rollbacks.
 - **Test seams** — hot code paths must remain unit-testable without live external calls.
 
+## Out of scope (do NOT flag)
+
+- **Release-bump PRs.** A diff that only changes `package.json`'s `version` field, the matching `.version()` call in CLI entry points, and/or `HARNESS_VERSION` / `HARNESS_SHA` in workflow pins is a release artifact, NOT a semver violation. The features that justify the bump have already merged in prior PRs. The version bump is exactly how those features get exposed to consumers; rejecting it as "no functional changes" is backwards.
+- **CHANGELOG / release-notes only PRs** — same rationale.
+
 ## Review checklist
 
 1. Does this change touch a public contract? Is it additive (compatible) or breaking?
