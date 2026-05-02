@@ -7,6 +7,7 @@ __pycache__/
 .harness/embeddings.json
 .harness/.learnings.synthesize.lock
 .harness/.reindex.lock
+.harness/.research.lock
 .budget/
 *.log
 *.pyc

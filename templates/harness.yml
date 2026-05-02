@@ -34,6 +34,16 @@ commands:
   typecheck: {{TYPECHECK_CMD}}
   test: {{TEST_CMD}}
 
+# Research — pre-plan parallel persona panel (`harness research`).
+# Runs the active reviewer panel (canonical 7 or specialized set) against
+# a feature description plus recall-style prior context, then writes a
+# ## Research block to .harness/active_plan.md so the planner sees concerns
+# BEFORE writing the plan body. Default model matches the council's
+# reasoning tier; downgrade only if cost is the binding constraint.
+research:
+  model: gemini-2.5-pro     # match council's tier — research shapes the plan
+  # max_personas: 4         # uncomment to cap (e.g. 4 cheapest panel for cost)
+
 # Recall — vector retrieval blend settings (`harness recall`, `harness reindex`).
 # When .harness/embeddings.json exists and is fresh, `harness recall` adds
 # a cosine-similarity term to its score. Without an index (or with --no-vector)

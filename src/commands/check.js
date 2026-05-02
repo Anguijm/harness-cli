@@ -8,37 +8,28 @@ import {
   readTemplate,
 } from '../lib/template.js';
 import { loadHarnessConfig } from '../lib/config.js';
+import {
+  CANONICAL_REVIEWER_PERSONAS,
+  isSpecializedMode as isSpecializedModeShared,
+} from '../lib/personas.js';
 
-// Canonical reviewer personas — the 7 angle reviewers that the harness ships
-// with by default. Specialized-personas repos (council.specialized: true in
-// harness.yml) replace these with domain-specific reviewers (e.g., sportsdata
-// uses data-quality / statistical-validity / etc.) and skip the canonical 7
-// in drift checks. lead-architect.md and council/README.md are NOT in this
-// list — they're required even in specialized mode.
-const CANONICAL_REVIEWER_PERSONAS = new Set([
-  '.harness/council/accessibility.md',
-  '.harness/council/architecture.md',
-  '.harness/council/bugs.md',
-  '.harness/council/cost.md',
-  '.harness/council/maintainability.md',
-  '.harness/council/product.md',
-  '.harness/council/security.md',
-]);
+// CANONICAL_REVIEWER_PERSONAS and the specialized-mode test live in
+// src/lib/personas.js so check, research, and any future reviewer-panel
+// caller share one source of truth on which personas are active.
 
 function isSpecializedMode(cwd) {
-  const cfg = loadHarnessConfig(cwd);
-  if (!cfg.exists) return false;
-  if (!cfg.ok) {
-    // Bugs reviewer R2 PR #4: malformed harness.yml should be a fatal
-    // error in `harness check`, not silent fallback to default behavior.
-    // Otherwise a typo causes drift-check to start reporting canonical
-    // personas as missing with no indication the config is the problem.
-    console.error(
-      chalk.red(`harness.yml could not be parsed: ${cfg.error.message}`)
-    );
+  // Wraps the shared helper to preserve check's existing fatal-error
+  // behavior on malformed harness.yml (the shared helper throws; here
+  // we catch and exit 2 with a clean message). Other callers may want
+  // to fall back silently — they should call the shared helper directly
+  // and choose their own error policy.
+  try {
+    return isSpecializedModeShared(cwd);
+  } catch (e) {
+    console.error(chalk.red(e.message));
     console.error(
       chalk.dim(
-        `  Path: ${path.join(cwd, 'harness.yml')}\n  Fix the YAML syntax error and re-run.`
+        `  Path: ${e.cfgPath}\n  Fix the YAML syntax error and re-run.`
       )
     );
     // Exit 2 = config / runtime error, consistent with synthesize's
@@ -47,9 +38,6 @@ function isSpecializedMode(cwd) {
     // caller-input mistake (1), and config / setup failure (2).
     process.exit(2);
   }
-  return (
-    cfg.parsed && cfg.parsed.council && cfg.parsed.council.specialized === true
-  );
 }
 
 // Read-only drift report. Compares each canonical template file against the

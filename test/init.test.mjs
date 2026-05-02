@@ -949,4 +949,323 @@ function expectFile(dir, rel) {
   }
 }
 
+// Test 24: harness research --dry-run lists the canonical 7 personas without
+// calling the API, on a fresh init repo (canonical mode).
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    const out = run(`node "${CLI}" research "sample feature description" --dry-run`, dir);
+    assert(out.includes('personas     7:'), `expected 7 personas, got: ${out}`);
+    for (const p of [
+      'accessibility', 'architecture', 'bugs', 'cost',
+      'maintainability', 'product', 'security',
+    ]) {
+      assert(out.includes(p), `expected canonical persona "${p}" listed; got: ${out}`);
+    }
+    assert(out.includes('Dry run'), 'expected dry-run notice');
+    console.log('PASS: harness research lists canonical 7 personas in dry-run');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 25: harness research picks up the specialized persona set when
+// council.specialized: true. Replaces the canonical .md files with a small
+// custom set under .harness/council/.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    const yml = path.join(dir, 'harness.yml');
+    const cur = fs.readFileSync(yml, 'utf8');
+    fs.writeFileSync(
+      yml,
+      cur.replace('specialized: false', 'specialized: true')
+    );
+    // Replace canonical persona files with a domain-specific set.
+    const councilDir = path.join(dir, '.harness/council');
+    for (const f of fs.readdirSync(councilDir)) {
+      if (f === 'README.md' || f === 'lead-architect.md') continue;
+      fs.unlinkSync(path.join(councilDir, f));
+    }
+    fs.writeFileSync(
+      path.join(councilDir, 'data-quality.md'),
+      '# data-quality\n\n## Scope\nQuality of source data.\n'
+    );
+    fs.writeFileSync(
+      path.join(councilDir, 'statistical-validity.md'),
+      '# statistical-validity\n\n## Scope\nStatistical claims.\n'
+    );
+    const out = run(`node "${CLI}" research "ingest new data feed" --dry-run`, dir);
+    assert(
+      out.includes('data-quality') && out.includes('statistical-validity'),
+      `expected specialized personas listed; got: ${out}`
+    );
+    assert(
+      !out.includes('accessibility') && !out.includes('security'),
+      `canonical personas should be absent in specialized mode; got: ${out}`
+    );
+    console.log('PASS: harness research picks up specialized persona set');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 26: with stub fetch, full research run writes a properly-formatted
+// ## Research block to .harness/active_plan.md with the marker comments.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    const env = { ...process.env, HARNESS_RESEARCH_STUB_RESPONSE: '1' };
+    execSync(
+      `node "${CLI}" research "build a thing" --max-personas 2`,
+      { cwd: dir, encoding: 'utf8', stdio: 'pipe', env }
+    );
+    const plan = fs.readFileSync(
+      path.join(dir, '.harness/active_plan.md'),
+      'utf8'
+    );
+    assert(
+      plan.includes('<!-- harness-research-start -->'),
+      'expected start marker in active_plan.md'
+    );
+    assert(
+      plan.includes('<!-- harness-research-end -->'),
+      'expected end marker in active_plan.md'
+    );
+    assert(plan.includes('## Research'), 'expected ## Research heading');
+    assert(plan.includes('build a thing'), 'expected description echoed');
+    assert(plan.includes('stub concern for'), 'expected stub concern bullets');
+    console.log('PASS: harness research writes a marker-bracketed Research block');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 27: re-running research replaces the prior block (does not append).
+// Asserts that running twice with different descriptions leaves only one
+// Research block, with the second description's content.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    const env = { ...process.env, HARNESS_RESEARCH_STUB_RESPONSE: '1' };
+    execSync(
+      `node "${CLI}" research "first description" --max-personas 1`,
+      { cwd: dir, encoding: 'utf8', stdio: 'pipe', env }
+    );
+    execSync(
+      `node "${CLI}" research "second description" --max-personas 1`,
+      { cwd: dir, encoding: 'utf8', stdio: 'pipe', env }
+    );
+    const plan = fs.readFileSync(
+      path.join(dir, '.harness/active_plan.md'),
+      'utf8'
+    );
+    const startCount = (plan.match(/<!-- harness-research-start -->/g) || [])
+      .length;
+    const endCount = (plan.match(/<!-- harness-research-end -->/g) || [])
+      .length;
+    assert(
+      startCount === 1 && endCount === 1,
+      `expected exactly one Research block, got ${startCount} start / ${endCount} end markers`
+    );
+    assert(
+      plan.includes('second description'),
+      'expected second description in current Research block'
+    );
+    assert(
+      !plan.includes('first description'),
+      'expected prior Research block to be replaced, not appended'
+    );
+    console.log('PASS: harness research replaces the prior block on re-run');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 28: harness research without GEMINI_API_KEY (or stub) fails loud.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    const env = { ...process.env };
+    delete env.GEMINI_API_KEY;
+    delete env.HARNESS_RESEARCH_STUB_RESPONSE;
+    let err;
+    try {
+      execSync(`node "${CLI}" research "needs an api key" --max-personas 1`, {
+        cwd: dir,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env,
+      });
+    } catch (e) {
+      err = e;
+    }
+    assert(err, 'expected non-zero exit without API key');
+    assert(
+      String(err.stderr || '').includes('GEMINI_API_KEY not set'),
+      `expected fail-loud message, got: ${err.stderr}`
+    );
+    console.log('PASS: harness research fails loud without API key');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 29: --no-write prints to stdout instead of touching active_plan.md.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    // Prime active_plan.md with content we can check is unchanged.
+    const planPath = path.join(dir, '.harness/active_plan.md');
+    const sentinel = '# Sentinel plan title\n\nuntouched body\n';
+    fs.writeFileSync(planPath, sentinel);
+    const env = { ...process.env, HARNESS_RESEARCH_STUB_RESPONSE: '1' };
+    const out = execSync(
+      `node "${CLI}" research "no-write check" --no-write --max-personas 1`,
+      { cwd: dir, encoding: 'utf8', stdio: 'pipe', env }
+    );
+    assert(out.includes('## Research'), 'expected Research block on stdout');
+    assert(out.includes('no-write check'), 'expected description on stdout');
+    const after = fs.readFileSync(planPath, 'utf8');
+    assert(
+      after === sentinel,
+      `expected active_plan.md unchanged with --no-write; got modified content`
+    );
+    console.log('PASS: harness research --no-write keeps active_plan.md unchanged');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 30: a single persona's malformed response is reported as a failure
+// without aborting the rest of the run (Promise.allSettled fail-soft).
+// Uses a custom fetch deps injection via a tiny driver script that imports
+// research directly — the CLI wires the stub at process level which is
+// uniform across personas, so we use the dependency-injection seam instead.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    // Build the driver as an array of source lines so we can use real
+    // newline characters (\n in this test source = real newline in the
+    // joined string = real newline in the driver file). The earlier
+    // backtick-template version had to escape the newlines for the
+    // join('...') separator and got the escape level wrong, masking
+    // both responses as malformed.
+    const NL = String.fromCharCode(10);
+    const cleanResponse =
+      'PERSONA: PERSONA_NAME' + NL +
+      '' + NL +
+      'CONCERNS:' + NL +
+      '- only this persona returned cleanly' + NL +
+      '' + NL +
+      'OPEN_QUESTIONS:' + NL +
+      '- none' + NL +
+      '' + NL +
+      'RELATED_PRIOR_LEARNINGS:' + NL +
+      'none';
+    const driverLines = [
+      `import { research } from '${path.resolve('src/commands/research.js')}';`,
+      'let calls = 0;',
+      'const stubFetch = async () => {',
+      '  calls += 1;',
+      '  if (calls === 1) {',
+      '    return "this is malformed; no headers at all";',
+      '  }',
+      `  return ${JSON.stringify(cleanResponse)};`,
+      '};',
+      'process.env.GEMINI_API_KEY = "stub";',
+      `process.chdir(${JSON.stringify(dir)});`,
+      'research(',
+      '  "fail-soft test",',
+      '  { maxPersonas: 2 },',
+      '  { geminiFetch: stubFetch }',
+      ').catch(e => { console.error(e); process.exit(99); });',
+    ];
+    const driverPath = path.join(dir, '_driver.mjs');
+    fs.writeFileSync(driverPath, driverLines.join('\n'));
+    execSync(`node "${driverPath}"`, {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    const plan = fs.readFileSync(
+      path.join(dir, '.harness/active_plan.md'),
+      'utf8'
+    );
+    assert(
+      plan.includes('Personas that failed'),
+      `expected failed-personas section in plan; got:\n${plan}`
+    );
+    assert(
+      plan.includes('only this persona returned cleanly'),
+      'expected the surviving persona content present'
+    );
+    console.log('PASS: harness research fail-soft on a single persona malformed response');
+  } finally {
+    cleanup(dir);
+  }
+}
+
+// Test 31: every persona failing produces a non-zero exit (Codex P1 PR #8).
+// Fail-loud contract: a research run with zero successful personas is a
+// failure, even if a Research block was still written with the error
+// listing. Without this, automation that chains
+// `research && plan && push` would treat a totally-failed run as OK.
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    const driver = `
+      import { research } from '${path.resolve('src/commands/research.js')}';
+      const stubFetch = async () => {
+        throw new Error('simulated upstream failure for every persona');
+      };
+      process.env.GEMINI_API_KEY = 'stub';
+      process.chdir(${JSON.stringify(dir)});
+      research(
+        'all personas should fail',
+        { maxPersonas: 2 },
+        { geminiFetch: stubFetch }
+      ).catch(e => { console.error(e); process.exit(99); });
+    `;
+    const driverPath = path.join(dir, '_driver_allfail.mjs');
+    fs.writeFileSync(driverPath, driver);
+    let err;
+    try {
+      execSync(`node "${driverPath}"`, {
+        cwd: dir,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      });
+    } catch (e) {
+      err = e;
+    }
+    assert(err, 'expected non-zero exit when every persona fails');
+    assert(
+      err.status === 2,
+      `expected exit code 2 (config/runtime error), got ${err.status}`
+    );
+    // Block should still be written with the failure list — useful signal
+    // for the operator even if exit was non-zero.
+    const plan = fs.readFileSync(
+      path.join(dir, '.harness/active_plan.md'),
+      'utf8'
+    );
+    assert(
+      plan.includes('Personas that failed'),
+      'expected failed-personas section in plan even when all failed'
+    );
+    console.log('PASS: harness research exits non-zero when every persona fails');
+  } finally {
+    cleanup(dir);
+  }
+}
+
 console.log('All tests passed.');

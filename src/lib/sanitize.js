@@ -22,11 +22,13 @@
 export const UNTRUSTED_CLOSING_TAGS = [
   '</UNTRUSTED_FAILURE_RECORD>',
   '</UNTRUSTED_LEARNINGS_EXCERPTS>',
+  '</UNTRUSTED_RECALL_CONTEXT>',
 ];
 
 export const FAILURE_RECORD_CLOSING_TAG = '</UNTRUSTED_FAILURE_RECORD>';
 export const LEARNINGS_EXCERPTS_CLOSING_TAG =
   '</UNTRUSTED_LEARNINGS_EXCERPTS>';
+export const RECALL_CONTEXT_CLOSING_TAG = '</UNTRUSTED_RECALL_CONTEXT>';
 
 export function escapeClosingTag(tag) {
   return tag.replace('</', '<\\/');

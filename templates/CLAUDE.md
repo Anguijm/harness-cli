@@ -29,11 +29,12 @@ For any non-trivial change:
 
 1. **Recall past lessons first.** Run `harness recall "<theme of what you're about to build>"` to surface relevant entries from `.harness/learnings.md`, `.harness/failures.jsonl`, and prior council reports. Cheap, prevents you from re-learning things this repo already learned.
 2. **Repository Impact Map.** Run `harness map "<feature description>"` (or do the equivalent by hand: grep for relevant symbols, list the actual files and tests likely to change). Write the result to `.harness/active_plan.md` as a "Repository Impact" block at the top.
-3. **Write the plan** under the impact map in `.harness/active_plan.md`. Commit it (the council refuses to run against an untracked plan file).
-4. **Run the local council** if you want pre-PR review: `python3 .harness/scripts/council.py --plan .harness/active_plan.md`.
-5. **Implement** — smallest diff that achieves the plan.
-6. **Push and let CI run** — both computational sensors (CI lint/typecheck/test) and the inferential sensor (council). Address remediations as follow-up commits.
-7. **Merge after 🟢** + green CI.
+3. **Run pre-plan research.** `harness research "<feature description>"` runs the active reviewer panel (canonical 7 or specialized set) in parallel against the description and writes a `## Research` block to `.harness/active_plan.md` with each persona's concerns + open questions. This catches at plan time what the council would otherwise flag at review time. Skip on trivial mechanical changes; run on anything with non-obvious risk surface. Re-running replaces the block; `--no-write` prints to stdout.
+4. **Write the plan** under the impact + research blocks in `.harness/active_plan.md`. Address the research concerns explicitly in the plan body. Commit it (the council refuses to run against an untracked plan file).
+5. **Run the local council** if you want pre-PR review: `python3 .harness/scripts/council.py --plan .harness/active_plan.md`.
+6. **Implement** — smallest diff that achieves the plan.
+7. **Push and let CI run** — both computational sensors (CI lint/typecheck/test) and the inferential sensor (council). Address remediations as follow-up commits.
+8. **Merge after 🟢** + green CI.
 
 ## Pull requests — do not auto-create
 
