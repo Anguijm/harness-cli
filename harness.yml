@@ -57,6 +57,12 @@ recall:
   # embeddings.json cache (which `harness reindex` would silently
   # regenerate). Short-circuits before the embed API call, so there's
   # no cost even if an index exists.
+  # IMPORTANT: must be the YAML boolean `false`, not the string
+  # `"false"` — the implementation uses strict equality (`=== false`)
+  # so any other value (string "false", number 0, null) leaves the
+  # blend ENABLED. The strictness is deliberate: defensive against
+  # typos like `vector: 0` (which YAML would parse as a number, not a
+  # falsy intent).
   # vector: false
 
 # Synthesis page generation — `harness synthesize` settings.
