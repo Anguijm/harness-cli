@@ -96,10 +96,19 @@ function loadVectorConfig(cwd) {
   // unset; falls back silently if harness.yml is unparseable
   // (loadConfiguredSources already warns on the same parse failure for
   // the sources list, so we don't double-warn).
+  //
+  // recall.vector: false is the persistent kill switch — equivalent to
+  // passing --no-vector on every call. Unlike deleting the index file
+  // (which `harness reindex` would silently regenerate), this is a
+  // config-level off that recall honors without behavioral discipline.
+  // The kill switch was added on the back of an LLMwiki-NoDep PR #15
+  // bugs-persona finding: the original "delete embeddings.json" kill
+  // criterion was incomplete because reindex restores it.
   const cfg = loadHarnessConfig(cwd);
-  if (!cfg.ok) return { weight: DEFAULT_VECTOR_WEIGHT };
+  if (!cfg.ok) return { weight: DEFAULT_VECTOR_WEIGHT, disabled: false };
   const recall = cfg.parsed && cfg.parsed.recall;
-  if (!recall) return { weight: DEFAULT_VECTOR_WEIGHT };
+  if (!recall) return { weight: DEFAULT_VECTOR_WEIGHT, disabled: false };
+  const disabled = recall.vector === false;
   const w = recall.vector_weight;
   // Cap at 5: weights > 1.0 already let semantic matches outrank exact
   // keyword hits and are rarely what the user wants on a small corpus.
@@ -107,9 +116,9 @@ function loadVectorConfig(cwd) {
   // certainly a configuration error, so we silently fall back to default
   // rather than letting it nuke the keyword scorer's contribution.
   if (typeof w === 'number' && w >= 0 && w <= 5) {
-    return { weight: w };
+    return { weight: w, disabled };
   }
-  return { weight: DEFAULT_VECTOR_WEIGHT };
+  return { weight: DEFAULT_VECTOR_WEIGHT, disabled };
 }
 
 function formatExcerpt(chunk, maxLines = 12) {
@@ -151,7 +160,13 @@ export async function recall(query, options) {
   // cosine-similarity component to each chunk's score. If the index is
   // missing, partial, or the user passed --no-vector, fall back to
   // keyword-only behavior (recall stays useful without an index).
-  const useVector = options.vector !== false;
+  // Two ways to disable the vector blend:
+  //   --no-vector flag (per-call)
+  //   recall.vector: false in harness.yml (persistent kill switch)
+  // The persistent form short-circuits before loadIndex / embed, so
+  // there's no API call cost even if an index file exists.
+  const cfgEarly = loadVectorConfig(cwd);
+  const useVector = options.vector !== false && !cfgEarly.disabled;
   let vectorScores = null;
   if (useVector) {
     const index = loadIndex(cwd);
@@ -178,13 +193,15 @@ export async function recall(query, options) {
             apiKey: process.env.GEMINI_API_KEY,
             model: index.model,
           });
-          const cfg = loadVectorConfig(cwd);
+          // Reuse cfgEarly loaded above — same loadHarnessConfig call,
+          // returning the same {weight, disabled} shape. No need to
+          // re-parse harness.yml.
           vectorScores = new Map();
           for (const c of chunks) {
             const entry = index.entries[chunkContentHash(c.text)];
             if (!entry || !Array.isArray(entry.vector)) continue;
             const sim = cosineSimilarity(queryVec, entry.vector);
-            vectorScores.set(c.text, { sim, weight: cfg.weight });
+            vectorScores.set(c.text, { sim, weight: cfgEarly.weight });
           }
         } catch (e) {
           // Fail-soft on the query-embed path: recall should never break

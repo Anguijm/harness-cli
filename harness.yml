@@ -52,6 +52,12 @@ recall:
   embedding_model: text-embedding-004   # 768-dim Gemini embeddings; cheap, fast.
   vector_weight: 0.5                    # Vector contribution scaled by max_keyword_score
                                         # so 0.5 reads as "half a top keyword hit."
+  # Persistent kill switch. Set `vector: false` to disable the blend
+  # without per-call --no-vector flags. Stronger than deleting the
+  # embeddings.json cache (which `harness reindex` would silently
+  # regenerate). Short-circuits before the embed API call, so there's
+  # no cost even if an index exists.
+  # vector: false
 
 # Synthesis page generation — `harness synthesize` settings.
 # When .harness/failures.jsonl accumulates ≥ min_cluster_size failures sharing
