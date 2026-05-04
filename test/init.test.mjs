@@ -846,6 +846,62 @@ function expectFile(dir, rel) {
   }
 }
 
+// Test 22b: harness.yml `recall.vector: false` is the persistent kill switch.
+// Even with an index file present and no --no-vector flag, the blend is
+// skipped — equivalent to --no-vector but persistent and config-driven.
+// Backported into harness-cli on the back of the LLMwiki-NoDep PR #15
+// bugs-persona finding that "delete embeddings.json" was an incomplete
+// kill criterion (reindex regenerates it).
+{
+  const dir = makeTempRepo('node-ts');
+  try {
+    run(`node "${CLI}" init`, dir);
+    fs.writeFileSync(
+      path.join(dir, '.harness/learnings.md'),
+      ['# Learnings', '', '## 2026-04-30 — sample chunk', 'body content here', ''].join('\n')
+    );
+    // Build a real index first.
+    const env = {
+      ...process.env,
+      HARNESS_EMBED_STUB_RESPONSE: '{"deterministic":true}',
+    };
+    execSync(`node "${CLI}" reindex`, { cwd: dir, encoding: 'utf8', stdio: 'pipe', env });
+    // Sanity-check: index file exists, blend should be active by default.
+    assert(
+      fs.existsSync(path.join(dir, '.harness/embeddings.json')),
+      'index should exist after reindex'
+    );
+    // Now flip the kill switch: recall.vector: false in harness.yml.
+    const yml = path.join(dir, 'harness.yml');
+    const cur = fs.readFileSync(yml, 'utf8');
+    fs.writeFileSync(
+      yml,
+      cur.replace(
+        '  vector_weight: 0.5',
+        '  vector_weight: 0.5\n  vector: false'
+      )
+    );
+    // recall must not call the embed API now. Force a stub that throws
+    // if invoked — if recall short-circuits properly, the stub is never
+    // hit and recall succeeds with keyword-only behavior.
+    const blowupEnv = {
+      ...process.env,
+      HARNESS_EMBED_STUB_RESPONSE: '"this would parse to a string and throw"',
+    };
+    const out = execSync(
+      `node "${CLI}" recall "sample" --limit 1`,
+      { cwd: dir, encoding: 'utf8', stdio: 'pipe', env: blowupEnv }
+    );
+    assert(
+      out.includes('sample chunk'),
+      `expected keyword-only recall to surface the chunk; got: ${out}`
+    );
+    console.log('PASS: recall.vector: false is the persistent config-level kill switch');
+  } finally {
+    cleanup(dir);
+  }
+}
+
 // Test 23a: PURE semantic match — query has zero keyword overlap with the
 // target chunk; only the vector blend can surface it. Bugs reviewer R1 PR #7
 // flagged this as the missing core-value test. Uses the stub's "map" mode
