@@ -30,13 +30,13 @@ import {
   RECALL_CONTEXT_CLOSING_TAG,
 } from '../lib/sanitize.js';
 
-// Default: gemini-2.5-pro to match the council's reasoning tier.
+// Default: gemini-3.5-flash to match the council's reasoning tier.
 // Research is the upstream step that shapes the plan; cheaping out here
 // means the downstream council catches issues that better upstream
 // reasoning would have surfaced before the plan was written. Cost is
 // bounded by feature cadence (~one research call per non-trivial
 // feature), so the Pro premium is well-spent.
-const DEFAULT_MODEL = 'gemini-2.5-pro';
+const DEFAULT_MODEL = 'gemini-3.5-flash';
 
 // Cap on total characters of recall-context block injected into each
 // persona prompt. ~1.5K tokens worth (4 chars/token rule of thumb);
