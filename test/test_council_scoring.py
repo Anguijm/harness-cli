@@ -114,6 +114,40 @@ check(
     "multi-token 10 -> None (prose fallback), not ~1",
 )
 
+# hijack guard: the most-probable scoring token must match the prose Score:
+# integer, else the anchor mislocated → None (fall back to prose).
+check(
+    council.score_distribution_from_response(_Resp(chosen, tops), 10, expected_value=3) is None,
+    "hijack guard: logprob argmax (8) != prose score (3) -> None",
+)
+check(
+    council.score_distribution_from_response(_Resp(chosen, tops), 10, expected_value=8) is not None,
+    "hijack guard: logprob argmax (8) == prose score (8) -> dist kept",
+)
+
+# a conversational number before the real "Score:" line must NOT hijack the
+# anchor: "CVSS score of 9.8 ... Score: 3" should read 3, not 9.
+chosen_conv = [
+    _Cand("CVSS"), _Cand(" score"), _Cand(" of"), _Cand(" 9"), _Cand("."), _Cand("8"),
+    _Cand(" Score"), _Cand(":"), _Cand(" 3"),
+]
+tops_conv = [
+    _Pos([_Cand("CVSS", math.log(0.9))]),
+    _Pos([_Cand(" score", math.log(0.9))]),
+    _Pos([_Cand(" of", math.log(0.9))]),
+    _Pos([_Cand("9", math.log(0.9))]),
+    _Pos([_Cand(".", math.log(0.9))]),
+    _Pos([_Cand("8", math.log(0.9))]),
+    _Pos([_Cand(" Score", math.log(0.9))]),
+    _Pos([_Cand(":", math.log(0.9))]),
+    _Pos([_Cand("3", math.log(0.8)), _Cand("4", math.log(0.2))]),
+]
+dist_conv = council.score_distribution_from_response(_Resp(chosen_conv, tops_conv), 10, expected_value=3)
+check(
+    dist_conv is not None and int(round(council.expected_score(dist_conv))) == 3,
+    "anchors on last 'Score:' (3), not conversational 'score of 9'",
+)
+
 # out-of-range digits are dropped (scale_max=10 excludes 99)
 tops_oor = [
     _Pos([_Cand("Score", math.log(0.9))]),

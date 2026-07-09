@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node src/cli.js",
-    "test": "node test/init.test.mjs && python3 test/test_council_scoring.py",
+    "test": "node test/init.test.mjs",
     "lint": "node -e \"console.log('no linter configured yet')\"",
     "typecheck": "node -e \"console.log('no typechecker configured yet')\""
   },

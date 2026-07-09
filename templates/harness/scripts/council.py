@@ -70,7 +70,13 @@ EXCLUDED_PERSONAS = {"lead-architect.md", "README.md"}
 #
 # Overridable per-run via --granularity/--repeat-k or the HARNESS_GRANULARITY/
 # HARNESS_REPEAT_K env vars (env is how council.yml would wire harness.yml).
-SCORE_SCALE_MAX = 10  # Persona scores are on a 1..SCORE_SCALE_MAX scale.
+# Persona scores are on a 1..SCORE_SCALE_MAX scale. This MUST match the scale
+# the persona prompts instruct the model to use (the `Score: <1-10>` line in
+# each .harness/council/*.md output format). Changing it requires updating every
+# persona's output format in lockstep and re-running test/test_council_scoring.py;
+# a mismatch silently drops valid scores as out-of-range or misweights the
+# continuous expectation.
+SCORE_SCALE_MAX = 10
 
 
 def _env_positive_int(name: str, default: int) -> int:
@@ -580,16 +586,23 @@ def aggregate_scores(values: list[float | None]) -> dict | None:
     return {"mean": mean, "min": min(vals), "max": max(vals), "variance": variance, "n": n}
 
 
-def score_distribution_from_response(resp, scale_max: int) -> list[tuple[float, float]] | None:
+def score_distribution_from_response(
+    resp, scale_max: int, expected_value: int | None = None
+) -> list[tuple[float, float]] | None:
     """Extract the scoring-token probability distribution from a Gemini
     response's logprobs, or None on ANY failure (→ caller falls back to prose
     parsing). Defensive by construction: every attribute access is guarded, so
     an unexpected SDK response shape degrades to today's behavior rather than
     crashing the merge-gating council.
 
-    Locates the score token as the first digit token that follows a 'score'
-    marker in the chosen-token stream, then reads the top candidates at that
-    position, keeping only integer tokens within [1, scale_max].
+    Anchors on the LAST line-oriented ``score:`` delimiter (colon required), so a
+    conversational number earlier in the critique — e.g. "CVSS score of 9.8" —
+    cannot hijack the read (codex/council #12). As a second guard, when
+    ``expected_value`` (the prose ``Score:`` integer) is supplied, the
+    most-probable scoring token must equal it, else the anchor is treated as a
+    mislocation and we fall back to prose. The logprobs only *refine* the
+    already-parsed integer into a continuous score; they never change which
+    integer the reviewer stated.
     """
     try:
         result = resp.candidates[0].logprobs_result
@@ -600,24 +613,30 @@ def score_distribution_from_response(resp, scale_max: int) -> list[tuple[float, 
     if not chosen or not tops or len(tops) < len(chosen):
         return None
 
+    # Reconstruct the decoded text + each token's start offset so we can anchor
+    # on the LAST "score:" delimiter (matching extract_score's line semantics)
+    # instead of the first bare "score" substring, which prose would false-match.
+    text = ""
+    starts: list[int] = []
+    for cand in chosen:
+        starts.append(len(text))
+        text += getattr(cand, "token", None) or ""
+    markers = list(re.finditer(r"score\s*:", text, re.IGNORECASE))
+    if not markers:
+        return None
+    marker_end = markers[-1].end()
     score_pos = None
-    seen_marker = False
-    acc = ""
-    for i, cand in enumerate(chosen):
-        tok = getattr(cand, "token", None) or ""
-        if seen_marker and tok.strip().isdigit():
+    for i, start in enumerate(starts):
+        if start < marker_end:
+            continue
+        if ((getattr(chosen[i], "token", None) or "").strip()).isdigit():
             score_pos = i
             break
-        acc += tok
-        if not seen_marker and "score" in acc.lower():
-            seen_marker = True
     if score_pos is None:
         return None
 
-    # Multi-token number guard: if the score is emitted as several digit tokens
-    # (e.g. "10" → "1","0"), the per-token distribution at the first digit is
-    # meaningless — it would read ~1 and turn a perfect 10 into a blocking
-    # score. Treat as unreadable so the caller falls back to the prose score.
+    # Multi-token number guard: "10" emitted as "1","0" would read ~1 and turn a
+    # perfect score into a blocking one. Treat as unreadable → prose fallback.
     if score_pos + 1 < len(chosen):
         nxt = getattr(chosen[score_pos + 1], "token", None) or ""
         if nxt.strip().isdigit():
@@ -636,7 +655,17 @@ def score_distribution_from_response(resp, scale_max: int) -> list[tuple[float, 
         value = int(tok)
         if 1 <= value <= scale_max:
             dist.append((float(value), math.exp(logp)))
-    return dist or None
+    if not dist:
+        return None
+
+    # Hijack guard: the most-probable scoring token must match the reviewer's
+    # stated Score: integer. If it doesn't, the anchor landed on the wrong
+    # number — discard and let the caller use the prose score.
+    if expected_value is not None:
+        argmax_value = max(dist, key=lambda vp: vp[1])[0]
+        if int(round(argmax_value)) != int(expected_value):
+            return None
+    return dist
 
 
 def _logprobs_config(granularity: int):
@@ -649,6 +678,9 @@ def _logprobs_config(granularity: int):
         from google.genai import types
     except Exception:  # noqa: BLE001
         return None
+    # Gemini rejects logprobs > 20 with an API validation error, so hard-cap
+    # here; requesting more top candidates than the score scale has values
+    # (SCORE_SCALE_MAX) yields no extra signal anyway.
     return types.GenerateContentConfig(
         response_logprobs=True,
         logprobs=min(int(granularity), 20),
@@ -683,8 +715,11 @@ def score_persona(
         text, resp = call_gemini_raw(client, model, prompt, budget, config=config)
         if first_text is None:
             first_text = text
+        # Parse the prose Score: first — it's the authoritative integer and the
+        # hijack guard the logprob reader cross-checks against.
+        prose = extract_score(text)
         dist = (
-            score_distribution_from_response(resp, SCORE_SCALE_MAX)
+            score_distribution_from_response(resp, SCORE_SCALE_MAX, expected_value=prose)
             if (config is not None and resp is not None)
             else None
         )
@@ -692,14 +727,16 @@ def score_persona(
             values.append(expected_score(dist))
             paths.append("logprob")
             continue
-        prose = extract_score(text)
         if prose is not None:
             values.append(float(prose))
             paths.append("prose_fallback" if config is not None else "prose")
         else:
             paths.append("malformed")
     agg = aggregate_scores(values)
-    # Representative path = the most informative one that actually fired.
+    # Representative path = the most informative one that fired, in descending
+    # fidelity: logprob (continuous, from the score-token logits) > prose (the
+    # discrete Score: integer, logprobs not requested) > prose_fallback
+    # (logprobs requested but unreadable — degraded) > malformed (no score).
     for pref in ("logprob", "prose", "prose_fallback", "malformed"):
         if pref in paths:
             path = pref
@@ -835,6 +872,10 @@ def main() -> int:
     critiques: dict[str, str] = {}
     distributions: dict[str, dict | None] = {}
     score_paths: dict[str, str] = {}
+    # max_workers capped at 6: the canonical panel is ~7 personas, and Gemini's
+    # per-project concurrency/rate limits make more parallel in-flight calls
+    # counterproductive (429s) rather than faster. Total calls are still bounded
+    # by RequestBudget/CALL_CAP; this only limits how many run at once.
     with ThreadPoolExecutor(max_workers=min(len(personas), 6)) as pool:
         futures = {}
         for name, body in personas:

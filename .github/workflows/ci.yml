@@ -75,3 +75,7 @@ jobs:
           spec.loader.exec_module(m)
           print('council.py loaded OK')
           "
+      - name: council scoring unit tests
+        # Python tests live in the Python job, NOT `npm test`, so the Node
+        # lifecycle has no implicit python3 dependency (council review #12).
+        run: python3 test/test_council_scoring.py
