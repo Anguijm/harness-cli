@@ -100,6 +100,20 @@ check(dist is not None and len(dist) == 2, "reads two numeric candidates, drops 
 exp = council.expected_score(dist)
 check(approx(exp, (8 * 0.73 + 9 * 0.27) / (0.73 + 0.27), 1e-6), "continuous score from logprobs")
 
+# multi-token "10" ("1" then "0") must fall back to prose, not read ~1 and turn
+# a perfect score into a blocking one (codex #12 P2).
+chosen_10 = [_Cand("Score"), _Cand(":"), _Cand(" 1"), _Cand("0")]
+tops_10 = [
+    _Pos([_Cand("Score", math.log(0.9))]),
+    _Pos([_Cand(":", math.log(0.9))]),
+    _Pos([_Cand("1", math.log(0.8)), _Cand("2", math.log(0.2))]),
+    _Pos([_Cand("0", math.log(0.9))]),
+]
+check(
+    council.score_distribution_from_response(_Resp(chosen_10, tops_10), 10) is None,
+    "multi-token 10 -> None (prose fallback), not ~1",
+)
+
 # out-of-range digits are dropped (scale_max=10 excludes 99)
 tops_oor = [
     _Pos([_Cand("Score", math.log(0.9))]),

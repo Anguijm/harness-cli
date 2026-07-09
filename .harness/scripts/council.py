@@ -614,6 +614,15 @@ def score_distribution_from_response(resp, scale_max: int) -> list[tuple[float, 
     if score_pos is None:
         return None
 
+    # Multi-token number guard: if the score is emitted as several digit tokens
+    # (e.g. "10" → "1","0"), the per-token distribution at the first digit is
+    # meaningless — it would read ~1 and turn a perfect 10 into a blocking
+    # score. Treat as unreadable so the caller falls back to the prose score.
+    if score_pos + 1 < len(chosen):
+        nxt = getattr(chosen[score_pos + 1], "token", None) or ""
+        if nxt.strip().isdigit():
+            return None
+
     dist: list[tuple[float, float]] = []
     try:
         candidates = tops[score_pos].candidates
@@ -864,6 +873,27 @@ def main() -> int:
     )
     for name, text in sorted(critiques.items()):
         synthesis_payload += f"\n### {name}\n{text}\n"
+    # In scaled modes the critique text above is only the FIRST of K repeats,
+    # so its inline "Score:" line can disagree with the aggregate/continuous
+    # score in the Scores table. Hand the Lead the authoritative aggregate so
+    # a lucky first run can't drive the synthesis (codex #12 P1).
+    if args.granularity > 1 or args.repeat_k > 1:
+        synthesis_payload += (
+            "\n---\nAUTHORITATIVE SCORES — use these, NOT any 'Score:' line in the "
+            f"critique text above (that text shows only the first of {args.repeat_k} "
+            "run(s); these are aggregated across all runs and, at granularity>1, "
+            "are the continuous logprob expectation):\n"
+        )
+        for name in sorted(distributions):
+            agg = distributions[name]
+            if agg:
+                synthesis_payload += (
+                    f"- {name}: {agg['mean']:.2f} "
+                    f"(min {agg['min']:.2f}, max {agg['max']:.2f}, "
+                    f"n={agg['n']}, path={score_paths[name]})\n"
+                )
+            else:
+                synthesis_payload += f"- {name}: n/a (path={score_paths[name]})\n"
     # Lead Architect sees prior context before the new critiques so they can
     # surface contradictions as they synthesize.
     if prior_context:
