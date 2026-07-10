@@ -34,7 +34,10 @@ import { loadHarnessConfig } from '../lib/config.js';
 
 // Cheaper / faster Gemini variant — synthesis is short and stateless and
 // doesn't need pro-tier reasoning. Override per repo via harness.yml
-// `synthesize.model`.
+// `synthesize.model`. This constant is the source of truth for the synthesize
+// default; keep it in sync with `synthesize.model` in harness.yml + templates/
+// harness.yml. Deliberately gemini-2.5-flash, NOT the council's gemini-3.5-flash:
+// 2.5-flash was never retired and is ~5x cheaper for this review-gated draft.
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 // Cost guardrail. Caps API calls per --apply run on a repo with a large
 // backlog of un-synthesized clusters. Override per repo via harness.yml
