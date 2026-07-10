@@ -23,6 +23,10 @@ env:
   # Release convention: cut the tag (uppercase `V`, matching V0.2.x/V0.3.x) from
   # the commit named by HARNESS_SHA. The checkout below resolves by SHA, so the
   # pin is valid before the tag exists and never depends on tag casing.
+  # Retrieve the SHA a release tag points to with:
+  #   git ls-remote https://github.com/Anguijm/harness-cli.git refs/tags/<tag>
+  # (or `git rev-parse <tag>` in a local clone). HARNESS_VERSION must name the
+  # tag that resolves to HARNESS_SHA — if they diverge, the label is lying.
   HARNESS_VERSION: V0.3.2
   HARNESS_SHA: 644cae64ab50e691b73f19446b25d32874dcdfe2
 
