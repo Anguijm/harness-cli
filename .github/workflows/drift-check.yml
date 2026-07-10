@@ -24,7 +24,7 @@ env:
   # the commit named by HARNESS_SHA. The checkout below resolves by SHA, so the
   # pin is valid before the tag exists and never depends on tag casing.
   HARNESS_VERSION: V0.3.2
-  HARNESS_SHA: ce329581edbeeee54457244e1d8801ce83ef97f0
+  HARNESS_SHA: 644cae64ab50e691b73f19446b25d32874dcdfe2
 
 on:
   schedule:

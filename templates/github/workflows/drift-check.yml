@@ -20,7 +20,7 @@ env:
   # This is the canonical drift-check that harness-cli ships; bump these two
   # values to adopt a newer harness release (the pin resolves by SHA).
   HARNESS_VERSION: V0.3.2
-  HARNESS_SHA: ce329581edbeeee54457244e1d8801ce83ef97f0
+  HARNESS_SHA: 644cae64ab50e691b73f19446b25d32874dcdfe2
 
 on:
   schedule:
