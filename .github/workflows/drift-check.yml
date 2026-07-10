@@ -20,6 +20,9 @@ env:
   # harness-cli maintainers: when bumping these two values at release time,
   # also bump the matching pin in templates/github/workflows/drift-check.yml so
   # newly-bootstrapped repos start on the same release.
+  # Release convention: cut the tag (uppercase `V`, matching V0.2.x/V0.3.x) from
+  # the commit named by HARNESS_SHA. The checkout below resolves by SHA, so the
+  # pin is valid before the tag exists and never depends on tag casing.
   HARNESS_VERSION: V0.3.2
   HARNESS_SHA: ce329581edbeeee54457244e1d8801ce83ef97f0
 
