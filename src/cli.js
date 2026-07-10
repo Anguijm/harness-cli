@@ -70,7 +70,7 @@ program
   .option('--dry-run', 'Print the persona list + context preview without calling Gemini')
   .option('--no-write', 'Print the Research block to stdout instead of writing to active_plan.md')
   .option('--max-personas <n>', 'Cap personas per run (default = all active)', (v) => parseInt(v, 10))
-  .option('-m, --model <name>', 'Override the Gemini model (default gemini-2.5-pro)')
+  .option('-m, --model <name>', 'Override the Gemini model (default gemini-3.5-flash)')
   .action(research);
 
 program
