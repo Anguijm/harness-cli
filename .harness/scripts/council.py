@@ -52,6 +52,10 @@ MAX_RETRIES = 1  # Per-call retry budget. Set to 1 to handle transient API
                  # genuinely flaky output for some classes of prompts; lower
                  # to 0 if cost is the binding constraint and you accept
                  # rare incomplete reviews.
+# Keep this default in sync with `default_model` in harness.yml — both name the
+# reviewer/synthesis model the council runs on. gemini-2.5-pro was retired by
+# Google (404s in CI); gemini-3.5-flash is the current default. Override per-run
+# with the HARNESS_MODEL env var or `--model`.
 DEFAULT_MODEL = os.environ.get("HARNESS_MODEL", "gemini-3.5-flash")
 EXCLUDED_PERSONAS = {"lead-architect.md", "README.md"}
 

@@ -10,6 +10,8 @@ language: typescript
 council:
   # Personas auto-discovered from .harness/council/*.md (excludes README + lead-architect).
   # To disable an angle, rename to <angle>.md.disabled.
+  # Keep in sync with DEFAULT_MODEL in .harness/scripts/council.py. gemini-2.5-pro
+  # was retired by Google (404s); gemini-3.5-flash is the current default.
   default_model: gemini-3.5-flash
 
   # Specialized-personas mode: when true, `harness check` and `drift-check.yml`
@@ -71,7 +73,7 @@ recall:
 # drafts an auto-marked synthesis section in learnings.md. Read-only by
 # default; --apply requires GEMINI_API_KEY.
 synthesize:
-  model: gemini-3.5-flash   # cheaper/faster model for drafting
+  model: gemini-2.5-flash   # cheaper/faster model for drafting
   max: 5                    # cap clusters per --apply run (cost guardrail)
   min_cluster_size: 3       # threshold matches lint's duplicate_signal check
 
