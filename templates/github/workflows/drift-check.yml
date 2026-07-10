@@ -23,6 +23,8 @@ env:
   #   git ls-remote https://github.com/Anguijm/harness-cli.git refs/tags/<tag>
   # (or `git rev-parse <tag>` in a local clone). HARNESS_VERSION must name the
   # tag that resolves to HARNESS_SHA — if they diverge, the label is lying.
+  # Within harness-cli, keep these pins in sync with the repo's own
+  # .github/workflows/drift-check.yml (this file is the template copy of it).
   HARNESS_VERSION: V0.3.2
   HARNESS_SHA: 644cae64ab50e691b73f19446b25d32874dcdfe2
 
