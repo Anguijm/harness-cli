@@ -1,6 +1,7 @@
 {
   "name": "harness-cli",
-  "version": "0.3.0",
+  "//": "On version bump also update: .version() in src/cli.js, and HARNESS_VERSION + HARNESS_SHA in .github/workflows/drift-check.yml and templates/github/workflows/drift-check.yml.",
+  "version": "0.3.2",
   "description": "AI development harness — plan, council, build methodology as a CLI",
   "type": "module",
   "bin": {
